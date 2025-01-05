@@ -89,6 +89,9 @@ const mitigateRedundantMenuItems = async (menuPage: Page) => {
     });
     await submitButton.click();
   }
+
+  const skipButton = campaignFrame.getByText("Continuar sin confirmar");
+  await skipButton.click();
 };
 
 await main();
