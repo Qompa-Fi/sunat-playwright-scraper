@@ -33,10 +33,36 @@ const main = async () => {
 
   await mitigateRedundantMenuItems(page);
 
+  await menuToElectronicSalesAndRevenueManagement(page);
+
+  console.log("waiting...");
+
   await Bun.sleep(DEFAULT_TIMEOUT_MS * 5);
 
   await browser.close();
 };
+
+const menuToElectronicSalesAndRevenueManagement = async (menuPage: Page) => {
+  const must$ = async (selector: string) => await pageMust$(menuPage, selector);
+
+  const result = await must$("#divOpcionServicio2");
+  await result.click();
+
+  const SIRE_LABEL = "Sistema Integrado de Registros Electronicos";
+  const sireOption = menuPage.getByText(SIRE_LABEL);
+  await sireOption.click();
+
+  const sireElectronicRecords = await must$(
+    "#nivel1Cuerpo_60 .nivel2 .spanNivelDescripcion", // AKA Registros Electronicos
+  );
+  await sireElectronicRecords.click();
+
+  await menuPage.getByText("Registro de Ventas e Ingresos Electronico").click();
+  await menuPage.getByText("Gestión de Ventas e Ingresos Electrónicos").click();
+};
+
+// Registro de Compras Electronico
+// -> Gestion de Compras
 
 const pageMust$ = async (
   page: Page,
