@@ -5,13 +5,13 @@
   "devDependencies": {
     "@playwright/test": "^1.49.1",
     "@types/bun": "latest",
-    "@types/node": "^22.10.5",
-    "playwright": "^1.49.1"
+    "@types/node": "^22.10.5"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "playwright": "^1.49.1",
     "@bogeychan/elysia-logger": "^0.1.7",
     "elysia": "^1.2.10",
     "graceful-server-elysia": "^1.0.25"
