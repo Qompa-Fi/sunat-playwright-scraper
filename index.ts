@@ -15,11 +15,15 @@ interface SunatCredentials {
 
 type BookCode = "140000" | "080000";
 
-const credentialsSchema = t.Object({
-  sol_username: t.String({ minLength: 3, maxLength: 8 }),
-  sol_key: t.String({ minLength: 2, maxLength: 12 }),
-  ruc: t.String({ minLength: 11, maxLength: 11 }),
-});
+const getGenericQuerySchema = (params?: { withPeriod?: boolean }) =>
+  t.Object({
+    sol_username: t.String({ minLength: 3, maxLength: 8 }),
+    sol_key: t.String({ minLength: 2, maxLength: 12 }),
+    ruc: t.String({ minLength: 11, maxLength: 11 }),
+    ...(params?.withPeriod && {
+      tax_period: t.String({ minLength: 6, maxLength: 6 }),
+    }),
+  });
 
 const log = createPinoLogger({
   level: "debug",
@@ -82,11 +86,13 @@ const main = async () => {
     })
     .get(
       "/sales-and-revenue-management",
-      async ({ query: credentials, error }) => {
+      async ({ query, error }) => {
+        const { tax_period: taxPeriod, ...credentials } = query;
+
         const token = await getSunatToken(credentials);
         if (!token) return error(500, "Internal Server Error");
 
-        const data = await SunatAPI.getExportedData(token, "080000");
+        const data = await SunatAPI.getExportedData(token, "080000", taxPeriod);
 
         const [, ...rows] = data.split("\n");
 
@@ -116,7 +122,7 @@ const main = async () => {
 
         return { data: results };
       },
-      { query: credentialsSchema },
+      { query: getGenericQuerySchema({ withPeriod: true }) },
     )
     .get(
       "/sales-and-revenue-management/periods",
@@ -127,15 +133,17 @@ const main = async () => {
         const periods = await SunatAPI.getPeriods(token, "080000");
         return { tax_periods: periods };
       },
-      { query: credentialsSchema },
+      { query: getGenericQuerySchema() },
     )
     .get(
       "/purchasing-management",
-      async ({ query: credentials, error }) => {
+      async ({ query, error }) => {
+        const { tax_period: taxPeriod, ...credentials } = query;
+
         const token = await getSunatToken(credentials);
         if (!token) return error(500, "Internal Server Error");
 
-        const data = await SunatAPI.getExportedData(token, "140000");
+        const data = await SunatAPI.getExportedData(token, "140000", taxPeriod);
 
         const [, ...rows] = data.split("\n");
 
@@ -167,7 +175,7 @@ const main = async () => {
 
         return { data: results };
       },
-      { query: credentialsSchema },
+      { query: getGenericQuerySchema({ withPeriod: true }) },
     )
     .get(
       "/purchasing-management/periods",
@@ -178,7 +186,7 @@ const main = async () => {
         const periods = await SunatAPI.getPeriods(token, "140000");
         return { tax_periods: periods };
       },
-      { query: credentialsSchema },
+      { query: getGenericQuerySchema() },
     );
 
   app
@@ -284,9 +292,10 @@ namespace SunatAPI {
   export const getExportedData = async (
     sunatToken: string,
     bookCode: BookCode,
+    taxPeriod: string,
   ): Promise<string> => {
     const response = await fetch(
-      `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rvierce/resumen/web/resumencomprobantes/202412/1/1/exporta?codLibro=${bookCode}`,
+      `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rvierce/resumen/web/resumencomprobantes/${taxPeriod}/1/1/exporta?codLibro=${bookCode}`,
       {
         credentials: "include",
         headers: {
