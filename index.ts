@@ -52,29 +52,36 @@ const main = async () => {
     window.sessionStorage.getItem("SUNAT.token"),
   );
 
-  const response = await fetch(
-    "https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rvierce/resumen/web/resumencomprobantes/202410/1/1/exporta?codLibro=080000",
-    {
-      credentials: "include",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (X11; Linux x86_64; rv:134.0) Gecko/20100101 Firefox/134.0",
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.5",
-        authorization: `Bearer ${sunatToken}`,
-        "Sec-GPC": "1",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-site",
-        Priority: "u=0",
+  const getReceiptsData = async (
+    bookCode: "140000" | "080000",
+  ): Promise<string> => {
+    const response = await fetch(
+      `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rvierce/resumen/web/resumencomprobantes/202412/1/1/exporta?codLibro=${bookCode}`,
+      {
+        credentials: "include",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (X11; Linux x86_64; rv:134.0) Gecko/20100101 Firefox/134.0",
+          Accept: "application/json, text/plain, */*",
+          "Accept-Language": "en-US,en;q=0.5",
+          authorization: `Bearer ${sunatToken}`,
+          "Sec-GPC": "1",
+          "Sec-Fetch-Dest": "empty",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Site": "same-site",
+          Priority: "u=0",
+        },
+        referrer: "https://e-factura.sunat.gob.pe/",
+        method: "GET",
+        mode: "cors",
       },
-      referrer: "https://e-factura.sunat.gob.pe/",
-      method: "GET",
-      mode: "cors",
-    },
-  );
+    );
 
-  console.log("await response.text()", await response.text());
+    return await response.text();
+  };
+
+  const summary = await getReceiptsData("080000");
+  console.log("summary:", summary);
 
   console.log("waiting...");
 
