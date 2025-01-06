@@ -30,11 +30,29 @@ const main = async () => {
     timeout: DEFAULT_TIMEOUT_MS,
   });
 
+  const appApiKey = process.env.APP_API_KEY;
+  if (!appApiKey) {
+    throw new Error("please set the API key");
+  }
+
   const app = new Elysia()
+    .use(logger({ level: "debug", autoLogging: true, base: undefined }))
     .guard({
-      beforeHandle: async () => log.info("new request was received"),
+      beforeHandle: async ({ headers, path, error }) => {
+        log.debug({ path }, "new request was received");
+
+        const apiKey = headers["x-api-key"];
+        if (!apiKey) {
+          log.warn('missing "X-API-Key" header');
+          return error(401, "Unauthorized");
+        }
+
+        if (!apiKey || apiKey !== appApiKey) {
+          log.warn('invalid "X-API-Key" header');
+          return error(401, "Unauthorized");
+        }
+      },
     })
-    .use(logger({ level: "debug", autoLogging: true }))
     .get(
       "/sales-and-revenue-management",
       async ({ query: credentials }) => {
