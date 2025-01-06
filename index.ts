@@ -87,7 +87,34 @@ const main = async () => {
         if (!token) return error(500, "Internal Server Error");
 
         const data = await SunatAPI.getExportedData(token, "080000");
-        return data;
+
+        const [, ...rows] = data.split("\n");
+
+        const results: Result.SalesAndRevenueManagement[] = [];
+
+        // We skip the last row (footer)
+        for (let i = 0; i < rows.length - 1; i++) {
+          const row = rows[i];
+          const columns = row.split(",").map((c) => c.trim());
+
+          results.push({
+            documentType: columns[0],
+            totalDocuments: Number.parseInt(columns[1]),
+            taxableBaseDG: Number.parseFloat(columns[2]),
+            igvIPMDG: Number.parseFloat(columns[3]),
+            taxableBaseDGNG: Number.parseFloat(columns[4]),
+            igvIPMDGNG: Number.parseFloat(columns[5]),
+            taxableBaseDNG: Number.parseFloat(columns[6]),
+            igvIPMDNG: Number.parseFloat(columns[7]),
+            nonTaxableValue: Number.parseFloat(columns[8]),
+            exciseTax: Number.parseFloat(columns[9]),
+            environmentalTax: Number.parseFloat(columns[10]),
+            otherTaxesOrCharges: Number.parseFloat(columns[11]),
+            totalAmount: Number.parseFloat(columns[12]),
+          });
+        }
+
+        return { data: results };
       },
       { query: credentialsSchema },
     )
@@ -109,7 +136,36 @@ const main = async () => {
         if (!token) return error(500, "Internal Server Error");
 
         const data = await SunatAPI.getExportedData(token, "140000");
-        return data;
+
+        const [, ...rows] = data.split("\n");
+
+        const results: Result.PurchasingManagement[] = [];
+
+        // We skip the last row (footer)
+        for (let i = 0; i < rows.length - 1; i++) {
+          const row = rows[i];
+          const columns = row.split(",").map((c) => c.trim());
+
+          results.push({
+            documentType: columns[0],
+            totalDocuments: Number.parseInt(columns[1]),
+            exportInvoicedValue: Number.parseFloat(columns[2]),
+            taxableOperationBase: Number.parseFloat(columns[3]),
+            taxableBaseDiscount: Number.parseFloat(columns[4]),
+            totalIGV: Number.parseFloat(columns[5]),
+            igvDiscount: Number.parseFloat(columns[6]),
+            exemptOperationTotal: Number.parseFloat(columns[7]),
+            unaffectedOperationTotal: Number.parseFloat(columns[8]),
+            exciseTaxISC: Number.parseFloat(columns[9]),
+            riceTaxableBase: Number.parseFloat(columns[10]),
+            riceSalesTax: Number.parseFloat(columns[11]),
+            environmentalTaxICBPER: Number.parseFloat(columns[12]),
+            otherTaxesOrCharges: Number.parseFloat(columns[13]),
+            totalAmount: Number.parseFloat(columns[14]),
+          });
+        }
+
+        return { data: results };
       },
       { query: credentialsSchema },
     )
@@ -139,11 +195,41 @@ const main = async () => {
     );
 };
 
-// export type ExportResult = {};
+namespace Result {
+  export interface SalesAndRevenueManagement {
+    documentType: string; // e.g., "01-Factura"
+    totalDocuments: number; // Total number of documents
+    taxableBaseDG: number; // BI Gravado DG
+    igvIPMDG: number; // IGV / IPM DG
+    taxableBaseDGNG: number; // BI Gravado DGNG
+    igvIPMDGNG: number; // IGV / IPM DGNG
+    taxableBaseDNG: number; // BI Gravado DNG
+    igvIPMDNG: number; // IGV / IPM DNG
+    nonTaxableValue: number; // Valor Adq. NG
+    exciseTax: number; // ISC
+    environmentalTax: number; // ICBPER
+    otherTaxesOrCharges: number; // Otros Trib/ Cargos
+    totalAmount: number; // Total CP
+  }
 
-export type PeriodResult = {
-  tax_periods: string[];
-};
+  export interface PurchasingManagement {
+    documentType: string; // Type of document (e.g., "01-Factura", "03-Boleta de Venta")
+    totalDocuments: number; // Total number of documents
+    exportInvoicedValue: number; // Valor facturado la exportación
+    taxableOperationBase: number; // Base imponible de la operación gravada
+    taxableBaseDiscount: number; // Dscto. de la Base Imponible
+    totalIGV: number; // Monto Total del IGV
+    igvDiscount: number; // Dscto. del IGV
+    exemptOperationTotal: number; // Importe total de la operación exonerada
+    unaffectedOperationTotal: number; // Importe total de la operación inafecta
+    exciseTaxISC: number; // ISC
+    riceTaxableBase: number; // Base imponible de la operación gravada con el Impuesto a las Ventas del Arroz Pilado
+    riceSalesTax: number; // Impuesto a las Ventas del Arroz Pilado
+    environmentalTaxICBPER: number; // ICBPER
+    otherTaxesOrCharges: number; // Otros Trib/ Cargos
+    totalAmount: number; // Total CP
+  }
+}
 
 namespace SunatAPI {
   export const getPeriods = async (
@@ -220,6 +306,16 @@ namespace SunatAPI {
         mode: "cors",
       },
     );
+
+    if (!response.ok) {
+      const body = await response.json();
+      log.error({ body }, "error fetching Sunat token");
+
+      throw new Error(
+        // @ts-ignore
+        `error fetching exported data, additional context: ${body.errors?.map((error) => error.msg).join(", ")}`,
+      );
+    }
 
     return await response.text();
   };
