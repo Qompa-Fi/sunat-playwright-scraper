@@ -24,6 +24,8 @@ const main = async () => {
     waitUntil: "networkidle",
   });
 
+  page.pause();
+
   await handleLogin(page);
 
   const title = await page.title();
@@ -32,8 +34,43 @@ const main = async () => {
   }
 
   await mitigateRedundantMenuItems(page);
-
   await menuToElectronicSalesAndRevenueManagement(page);
+
+  const anyFrame = page.frame({ url: /ww1.sunat.gob.pe/ });
+  if (!anyFrame) {
+    throw new Error("frame for ww1.sunat.gob.pe was not found");
+  }
+
+  await anyFrame.goto("https://e-factura.sunat.gob.pe");
+  await anyFrame.waitForLoadState("networkidle");
+
+  const sunatToken = await anyFrame.evaluate(async () =>
+    window.sessionStorage.getItem("SUNAT.token"),
+  );
+
+  const response = await fetch(
+    "https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rvierce/resumen/web/resumencomprobantes/202410/1/1/exporta?codLibro=080000",
+    {
+      credentials: "include",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (X11; Linux x86_64; rv:134.0) Gecko/20100101 Firefox/134.0",
+        Accept: "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.5",
+        authorization: `Bearer ${sunatToken}`,
+        "Sec-GPC": "1",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        Priority: "u=0",
+      },
+      referrer: "https://e-factura.sunat.gob.pe/",
+      method: "GET",
+      mode: "cors",
+    },
+  );
+
+  console.log("await response.text()", await response.text());
 
   console.log("waiting...");
 
@@ -45,8 +82,8 @@ const main = async () => {
 const menuToElectronicSalesAndRevenueManagement = async (menuPage: Page) => {
   const must$ = async (selector: string) => await pageMust$(menuPage, selector);
 
-  const result = await must$("#divOpcionServicio2");
-  await result.click();
+  const service2Option = await must$("#divOpcionServicio2");
+  await service2Option.click();
 
   const SIRE_LABEL = "Sistema Integrado de Registros Electronicos";
   const sireOption = menuPage.getByText(SIRE_LABEL);
@@ -59,6 +96,15 @@ const menuToElectronicSalesAndRevenueManagement = async (menuPage: Page) => {
 
   await menuPage.getByText("Registro de Ventas e Ingresos Electronico").click();
   await menuPage.getByText("Gestión de Ventas e Ingresos Electrónicos").click();
+
+  await menuPage.waitForLoadState("networkidle");
+
+  const appFrame = menuPage.frameLocator("#iframeApplication");
+  if (!appFrame) throw new Error("main frame not found");
+
+  const adviceModal = appFrame.getByText("×", { exact: true }); // if advice modal is open
+  const isAdviceModalOpen = await adviceModal.isVisible();
+  if (isAdviceModalOpen) await adviceModal.click();
 };
 
 // Registro de Compras Electronico

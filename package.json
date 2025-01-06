@@ -4,7 +4,7 @@
   "type": "module",
   "devDependencies": {
     "@playwright/test": "^1.49.1",
-    "@types/bun": "^1.1.14",
+    "@types/bun": "latest",
     "@types/node": "^22.10.5",
     "playwright": "^1.49.1"
   },
