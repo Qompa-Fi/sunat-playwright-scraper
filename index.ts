@@ -3,6 +3,7 @@ import type { Browser, ElementHandle, Page } from "playwright";
 import { pluginGracefulServer } from "graceful-server-elysia";
 import { chromium } from "playwright";
 import { Elysia, t } from "elysia";
+import NodeCache from "node-cache";
 
 const DEFAULT_TIMEOUT_MS = 30000 * 5;
 
@@ -32,10 +33,34 @@ const main = async () => {
     timeout: DEFAULT_TIMEOUT_MS,
   });
 
+  const cache = new NodeCache({ stdTTL: 60 * 10 });
+
   const appApiKey = process.env.APP_API_KEY;
   if (!appApiKey) {
     throw new Error("please set the API key");
   }
+
+  const getSunatToken = async (
+    credentials: SunatCredentials,
+  ): Promise<string | null> => {
+    const cachedToken = cache.get<string>(credentials.ruc);
+    if (cachedToken) {
+      return cachedToken;
+    }
+
+    const token = await Scraper.getSunatToken(browser, credentials);
+    if (!token) {
+      log.warn("sunat token could not be retrieved");
+      return null;
+    }
+
+    const ok = cache.set(credentials.ruc, token);
+    if (!ok) {
+      log.warn({ ruc: credentials.ruc }, "token could not be set to cache");
+    }
+
+    return token;
+  };
 
   const app = new Elysia()
     .use(logger({ level: "debug", autoLogging: true, base: undefined }))
@@ -58,11 +83,8 @@ const main = async () => {
     .get(
       "/sales-and-revenue-management",
       async ({ query: credentials, error }) => {
-        const token = await Scraper.getSunatToken(browser, credentials);
-        if (!token) {
-          log.error("sunat token could not be retrieved");
-          return error(500, "Internal Server Error");
-        }
+        const token = await getSunatToken(credentials);
+        if (!token) return error(500, "Internal Server Error");
 
         const data = await SunatAPI.getExportedData(token, "080000");
         return data;
@@ -72,27 +94,19 @@ const main = async () => {
     .get(
       "/sales-and-revenue-management/periods",
       async ({ query: credentials, error }) => {
-        const token = await Scraper.getSunatToken(browser, credentials);
-        if (!token) {
-          log.error("sunat token could not be retrieved");
-          return error(500, "Internal Server Error");
-        }
+        const token = await getSunatToken(credentials);
+        if (!token) return error(500, "Internal Server Error");
 
         const periods = await SunatAPI.getPeriods(token, "080000");
-        return {
-          tax_periods: periods,
-        };
+        return { tax_periods: periods };
       },
       { query: credentialsSchema },
     )
     .get(
       "/purchasing-management",
       async ({ query: credentials, error }) => {
-        const token = await Scraper.getSunatToken(browser, credentials);
-        if (!token) {
-          log.error("sunat token could not be retrieved");
-          return error(500, "Internal Server Error");
-        }
+        const token = await getSunatToken(credentials);
+        if (!token) return error(500, "Internal Server Error");
 
         const data = await SunatAPI.getExportedData(token, "140000");
         return data;
@@ -102,16 +116,11 @@ const main = async () => {
     .get(
       "/purchasing-management/periods",
       async ({ query: credentials, error }) => {
-        const token = await Scraper.getSunatToken(browser, credentials);
-        if (!token) {
-          log.error("sunat token could not be retrieved");
-          return error(500, "Internal Server Error");
-        }
+        const token = await getSunatToken(credentials);
+        if (!token) return error(500, "Internal Server Error");
 
         const periods = await SunatAPI.getPeriods(token, "140000");
-        return {
-          tax_periods: periods,
-        };
+        return { tax_periods: periods };
       },
       { query: credentialsSchema },
     );
