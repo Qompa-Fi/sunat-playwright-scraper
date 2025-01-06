@@ -26,6 +26,7 @@ const main = async () => {
 
   page.pause();
 
+  console.log("handling login...");
   await handleLogin(page);
 
   const title = await page.title();
@@ -33,7 +34,10 @@ const main = async () => {
     throw new Error(`Unexpected page title: ${title}`);
   }
 
+  console.log("mitigating possible redundant menu items...");
   await mitigateRedundantMenuItems(page);
+
+  console.log("navigating to electronic sales and revenue management...");
   await menuToElectronicSalesAndRevenueManagement(page);
 
   const anyFrame = page.frame({ url: /ww1.sunat.gob.pe/ });
@@ -151,7 +155,21 @@ const mitigateRedundantMenuItems = async (menuPage: Page) => {
   const suggestionLocator = secondaryModalLocator.getByText(
     SECONDARY_MODAL_TITLE,
   );
-  const suggestionInnerText = await suggestionLocator.innerText();
+
+  let suggestionInnerText = "";
+
+  try {
+    suggestionInnerText = await suggestionLocator.innerText({
+      timeout: 3000,
+    });
+  } catch (error) {
+    console.log(
+      "skipping mitigation...",
+      error instanceof Error ? error.message : error,
+    );
+    return;
+  }
+
   const secondaryModalExists =
     suggestionInnerText.trim() === SECONDARY_MODAL_TITLE;
 
@@ -162,8 +180,11 @@ const mitigateRedundantMenuItems = async (menuPage: Page) => {
     await submitButton.click();
   }
 
+  console.log("skipping secondary modal...");
+
   const skipButton = campaignFrame.getByText("Continuar sin confirmar");
-  await skipButton.click();
+
+  await skipButton.click({ timeout: 3000 });
 };
 
 await main();
