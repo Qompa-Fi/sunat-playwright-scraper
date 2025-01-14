@@ -551,7 +551,10 @@ namespace SunatAPI {
     count?: number;
   }
 
-  export const rawQueryProcesses = async (
+  //! GESTIÓN DE VENTAS E INGRESOS ELECTRÓNICOS -> 140000
+  //! GESTIÓN DE COMPRAS -> 080000
+
+  const rawQueryProcesses = async (
     sunatToken: string,
     inputs: QueryProcessesInputs,
   ): Promise<Result<RawQueryProcessesData, "bad_response">> => {
@@ -642,22 +645,25 @@ namespace SunatAPI {
    */
   queryProcesses.raw = rawQueryProcesses;
 
-  interface ExportIGVProposalInputs {
+  interface RequestPurchasingManagementProposalInputs {
     tax_period: string;
   }
 
-  export interface ExportIGVProposalData {
+  export interface RequestPurchasingManagementProposalData {
     ticket_id: string;
   }
 
   /**
    * @description Returns the ticket number so you can query the process in background while is being dispatched by the SUNAT platform.
    */
-  export const requestExportOfIGVProposal = async (
+  export const requestPurchasingManagementProposal = async (
     sunatToken: string,
-    inputs: ExportIGVProposalInputs,
+    inputs: RequestPurchasingManagementProposalInputs,
   ): Promise<
-    Result<ExportIGVProposalData, "no_ticket_in_response" | "bad_response">
+    Result<
+      RequestPurchasingManagementProposalData,
+      "no_ticket_in_response" | "bad_response"
+    >
   > => {
     const EXPORT_AS_CSV_CODE = "1";
 
@@ -678,17 +684,8 @@ namespace SunatAPI {
 
     const response = await fetch(`${endpoint}?${params}`, {
       headers: {
-        accept: "application/json, text/plain, */*",
-        "accept-language": "en-US,en;q=0.9",
-        authorization: `Bearer ${sunatToken}`,
-        "sec-ch-ua": '"Chromium";v="131", "Not_A Brand";v="24"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Linux"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-site",
-        Referer: "https://e-factura.sunat.gob.pe/",
-        "Referrer-Policy": "strict-origin-when-cross-origin",
+        ...genericHeaders,
+        Authorization: `Bearer ${sunatToken}`,
       },
       body: null,
       method: "GET",
@@ -712,14 +709,83 @@ namespace SunatAPI {
     return Result.ok({ ticket_id: body.numTicket });
   };
 
-  export const getProcessedIGVProposal = async (sunatToken: string) => {
+  interface RequestSalesAndRevenueManagementProposalInputs {
+    tax_period: string;
+  }
+
+  interface RequestSalesAndRevenueManagementProposalData {
+    ticket_id: string;
+  }
+
+  /**
+   * @description Returns the ticket number so you can query the process in background while is being dispatched by the SUNAT platform.
+   */
+  export const requestSalesAndRevenueManagementProposal = async (
+    sunatToken: string,
+    inputs: RequestSalesAndRevenueManagementProposalInputs,
+  ): Promise<
+    Result<
+      RequestSalesAndRevenueManagementProposalData,
+      "no_ticket_in_response" | "bad_response"
+    >
+  > => {
+    const EXPORT_AS_CSV_CODE = "1";
+
+    const endpoint = `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rce/propuesta/web/propuesta/${inputs.tax_period}/exportacioncomprobantepropuesta`;
+
     const params = new URLSearchParams({
-      nomArchivoReporte: "LE2061036307620250110014040001EXP2.zip",
-      codTipoArchivoReporte: "00",
-      codLibro: "140000",
-      perTributario: "202412",
-      codProceso: "10",
-      numTicket: "20240300000062",
+      codTipoArchivo: EXPORT_AS_CSV_CODE,
+      codOrigenEnvio: "1",
+    });
+
+    const response = await fetch(`${endpoint}?${params}`, {
+      headers: {
+        ...genericHeaders,
+        authorization: `Bearer ${sunatToken}`,
+      },
+      body: null,
+      method: "GET",
+    });
+    if (!response.ok) {
+      return Result.notok("bad_response");
+    }
+
+    interface RawBody {
+      numTicket?: string;
+    }
+
+    const untypedBody = await response.json();
+    const body = untypedBody as RawBody;
+
+    if (!body.numTicket) {
+      return Result.notok("no_ticket_in_response");
+    }
+
+    return Result.ok({ ticket_id: body.numTicket });
+  };
+
+  interface GetProcessedIGVProposalInputs {
+    report_file: {
+      code_type: string;
+      name: string;
+    };
+    book_code: BookCode;
+    tax_period: string;
+    ticket_id: string;
+    process_id: string;
+  }
+
+  export const getProcessedIGVProposal = async (
+    sunatToken: string,
+    inputs: GetProcessedIGVProposalInputs,
+  ) => {
+    const params = new URLSearchParams({
+      nomArchivoReporte: inputs.report_file.name,
+      codTipoArchivoReporte: inputs.report_file.code_type,
+      codLibro: inputs.book_code,
+      perTributario: inputs.tax_period,
+      codProceso: inputs.process_id,
+      numTicket: inputs.ticket_id,
     });
 
     const endpoint =
@@ -733,6 +799,9 @@ namespace SunatAPI {
       body: null,
       method: "GET",
     });
+
+    const data = await response.text();
+    console.log("data", data);
   };
 }
 
@@ -896,3 +965,14 @@ namespace Scraper {
 }
 
 await main();
+
+/**
+ * const params = new URLSearchParams({
+    nomArchivoReporte: "LE2061036307620250110014040001EXP2.zip",
+    codTipoArchivoReporte: "00",
+    codLibro: "140000",
+    perTributario: "202412",
+    codProceso: "10",
+    numTicket: "20240300000062",
+  });
+  */
