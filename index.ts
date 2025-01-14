@@ -53,13 +53,19 @@ interface SunatCredentials {
 
 type BookCode = "140000" | "080000";
 
-const getGenericQuerySchema = (params?: { withPeriod?: boolean }) =>
+const getGenericQuerySchema = (params?: {
+  withTaxPeriod?: boolean;
+  withTicketId?: boolean;
+}) =>
   t.Object({
     sol_username: t.String({ minLength: 3, maxLength: 8 }),
     sol_key: t.String({ minLength: 2, maxLength: 12 }),
     ruc: t.String({ minLength: 11, maxLength: 11 }),
-    ...(params?.withPeriod && {
+    ...(params?.withTaxPeriod && {
       tax_period: t.String({ minLength: 6, maxLength: 6 }),
+    }),
+    ...(params?.withTicketId && {
+      ticket_id: t.String({ minLength: 10, maxLength: 45 }),
     }),
   });
 
@@ -150,7 +156,7 @@ const main = async () => {
 
         return { data: result.value };
       },
-      { query: getGenericQuerySchema({ withPeriod: true }) },
+      { query: getGenericQuerySchema({ withTaxPeriod: true }) },
     )
     .get(
       "/sales-and-revenue-management/periods",
@@ -176,19 +182,18 @@ const main = async () => {
       },
       { query: getGenericQuerySchema() },
     )
-    .get(
-      "/purchasing-management",
+    .post(
+      "/purchasing-management/request-proposal",
       async ({ query, error }) => {
-        const { tax_period: taxPeriod, ...credentials } = query;
+        const { tax_period, ...credentials } = query;
 
         const token = await getSunatToken(credentials);
         if (!token) return error(500, "Internal Server Error");
 
-        const result = await SunatAPI.getTaxComplianceVerificationSummary(
+        const result = await SunatAPI.requestPurchasingManagementProposal(
           token,
           {
-            book_code: "140000",
-            tax_period: taxPeriod,
+            tax_period,
           },
         );
         if (!result.ok) {
@@ -201,12 +206,67 @@ const main = async () => {
           return error(500, "Internal Server Error");
         }
 
-        return { data: result.value };
+        return { ticket_id: result.value.ticket_id };
       },
-      { query: getGenericQuerySchema({ withPeriod: true }) },
+      { query: getGenericQuerySchema({ withTaxPeriod: true }) },
     )
     .get(
-      "/purchasing-management/periods",
+      "purchasing-management/proposal",
+      async ({ query, error }) => {
+        const { tax_period, ticket_id, ...credentials } = query;
+
+        const token = await getSunatToken(credentials);
+        if (!token) return error(500, "Internal Server Error");
+
+        const processesResult = await SunatAPI.queryProcesses(token, {
+          start_period: tax_period,
+          book_code: "080000",
+        });
+        if (!processesResult.ok) {
+          log.error(
+            {
+              reason: processesResult.reason,
+            },
+            "something went wrong trying to fetch tax compliance verification summary...",
+          );
+          return error(500, "Internal Server Error");
+        }
+
+        const process = processesResult.value.items.find(
+          (item) => item.ticket_id === ticket_id,
+        );
+        if (!process) {
+          log.debug(
+            {
+              ticket_id: query.ticket_id,
+            },
+            "process not found",
+          );
+          return error(404, "Not Found");
+        }
+
+        for (const file of process.files) {
+          await SunatAPI.getProcessedIGVProposal(token, {
+            book_code: "080000",
+            process_code: process.process_code,
+            report_file: {
+              code_type: process.process_status_code,
+              name: file.name,
+            },
+            tax_period,
+            ticket_id,
+          });
+        }
+      },
+      {
+        query: getGenericQuerySchema({
+          withTaxPeriod: true,
+          withTicketId: true,
+        }),
+      },
+    )
+    .get(
+      "/purchasing-management/tax-periods",
       async ({ query: credentials, error }) => {
         const token = await getSunatToken(credentials);
         if (!token) return error(500, "Internal Server Error");
@@ -667,6 +727,61 @@ namespace SunatAPI {
   > => {
     const EXPORT_AS_CSV_CODE = "1";
 
+    const endpoint = `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rce/propuesta/web/propuesta/${inputs.tax_period}/exportacioncomprobantepropuesta`;
+
+    const params = new URLSearchParams({
+      codTipoArchivo: EXPORT_AS_CSV_CODE,
+      codOrigenEnvio: "1",
+    });
+
+    const response = await fetch(`${endpoint}?${params}`, {
+      headers: {
+        ...genericHeaders,
+        authorization: `Bearer ${sunatToken}`,
+      },
+      body: null,
+      method: "GET",
+    });
+    if (!response.ok) {
+      return Result.notok("bad_response");
+    }
+
+    interface RawBody {
+      numTicket?: string;
+    }
+
+    const untypedBody = await response.json();
+    const body = untypedBody as RawBody;
+
+    if (!body.numTicket) {
+      return Result.notok("no_ticket_in_response");
+    }
+
+    return Result.ok({ ticket_id: body.numTicket });
+  };
+
+  interface RequestSalesAndRevenueManagementProposalInputs {
+    tax_period: string;
+  }
+
+  interface RequestSalesAndRevenueManagementProposalData {
+    ticket_id: string;
+  }
+
+  /**
+   * @description Returns the ticket number so you can query the process in background while is being dispatched by the SUNAT platform.
+   */
+  export const requestSalesAndRevenueManagementProposal = async (
+    sunatToken: string,
+    inputs: RequestSalesAndRevenueManagementProposalInputs,
+  ): Promise<
+    Result<
+      RequestSalesAndRevenueManagementProposalData,
+      "no_ticket_in_response" | "bad_response"
+    >
+  > => {
+    const EXPORT_AS_CSV_CODE = "1";
+
     const params = new URLSearchParams({
       codOrigenEnvio: "1",
       mtoTotalDesde: "",
@@ -709,70 +824,15 @@ namespace SunatAPI {
     return Result.ok({ ticket_id: body.numTicket });
   };
 
-  interface RequestSalesAndRevenueManagementProposalInputs {
-    tax_period: string;
-  }
-
-  interface RequestSalesAndRevenueManagementProposalData {
-    ticket_id: string;
-  }
-
-  /**
-   * @description Returns the ticket number so you can query the process in background while is being dispatched by the SUNAT platform.
-   */
-  export const requestSalesAndRevenueManagementProposal = async (
-    sunatToken: string,
-    inputs: RequestSalesAndRevenueManagementProposalInputs,
-  ): Promise<
-    Result<
-      RequestSalesAndRevenueManagementProposalData,
-      "no_ticket_in_response" | "bad_response"
-    >
-  > => {
-    const EXPORT_AS_CSV_CODE = "1";
-
-    const endpoint = `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rce/propuesta/web/propuesta/${inputs.tax_period}/exportacioncomprobantepropuesta`;
-
-    const params = new URLSearchParams({
-      codTipoArchivo: EXPORT_AS_CSV_CODE,
-      codOrigenEnvio: "1",
-    });
-
-    const response = await fetch(`${endpoint}?${params}`, {
-      headers: {
-        ...genericHeaders,
-        authorization: `Bearer ${sunatToken}`,
-      },
-      body: null,
-      method: "GET",
-    });
-    if (!response.ok) {
-      return Result.notok("bad_response");
-    }
-
-    interface RawBody {
-      numTicket?: string;
-    }
-
-    const untypedBody = await response.json();
-    const body = untypedBody as RawBody;
-
-    if (!body.numTicket) {
-      return Result.notok("no_ticket_in_response");
-    }
-
-    return Result.ok({ ticket_id: body.numTicket });
-  };
-
   interface GetProcessedIGVProposalInputs {
     report_file: {
       code_type: string;
       name: string;
     };
+    process_code: string;
     book_code: BookCode;
     tax_period: string;
     ticket_id: string;
-    process_id: string;
   }
 
   export const getProcessedIGVProposal = async (
@@ -784,7 +844,7 @@ namespace SunatAPI {
       codTipoArchivoReporte: inputs.report_file.code_type,
       codLibro: inputs.book_code,
       perTributario: inputs.tax_period,
-      codProceso: inputs.process_id,
+      codProceso: inputs.process_code,
       numTicket: inputs.ticket_id,
     });
 
