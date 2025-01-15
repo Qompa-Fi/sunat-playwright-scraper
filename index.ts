@@ -6,6 +6,14 @@ import { Elysia, t } from "elysia";
 import NodeCache from "node-cache";
 import AdmZip from "adm-zip";
 
+import type {
+  EntityDocumentTypeCode,
+  InvoiceStatusCode,
+  KnownCurrenciesAndMore,
+  ProofOfPaymentCode,
+  PurchaseRecord,
+} from "./types";
+
 const DEFAULT_TIMEOUT_MS = 30000 * 5;
 
 /**
@@ -52,7 +60,10 @@ interface SunatCredentials {
   ruc: string;
 }
 
-type BookCode = "140000" | "080000";
+enum BookCode {
+  Purchases = "140000",
+  SalesAndRevenues = "080000",
+}
 
 const getGenericQuerySchema = (params?: {
   withTaxPeriod?: boolean;
@@ -142,7 +153,7 @@ const main = async () => {
         const result = await SunatAPI.getTaxComplianceVerificationSummary(
           token,
           {
-            book_code: "080000",
+            book_code: BookCode.SalesAndRevenues,
             tax_period: taxPeriod,
           },
         );
@@ -169,7 +180,7 @@ const main = async () => {
 
         const result = await SunatAPI.getTaxComplianceVerificationPeriods(
           token,
-          "080000",
+          BookCode.SalesAndRevenues,
         );
         if (!result.ok) {
           log.error(
@@ -223,7 +234,7 @@ const main = async () => {
 
         const processesResult = await SunatAPI.queryProcesses(token, {
           start_period: tax_period,
-          book_code: "080000",
+          book_code: BookCode.Purchases,
         });
         if (!processesResult.ok) {
           log.error(
@@ -248,11 +259,13 @@ const main = async () => {
           return error(404, "Not Found");
         }
 
-        console.log("process", process);
+        log.trace(
+          { process, process_files_count: process.files.length },
+          "iterating over process files...",
+        );
 
         for (const file of process.files) {
-          await SunatAPI.getProcessedIGVProposal(token, {
-            book_code: "080000",
+          const result = await SunatAPI.getProcessedIncomesProposal(token, {
             process_code: process.process_code,
             report_file: {
               code_type: file.type_code,
@@ -261,7 +274,21 @@ const main = async () => {
             tax_period,
             ticket_id,
           });
+
+          if (!result.ok) {
+            log.error(
+              {
+                reason: result.reason,
+              },
+              "something went wrong trying to fetch tax compliance verification summary...",
+            );
+            return error(500, "Internal Server Error");
+          }
+
+          return { data: result.value };
         }
+
+        return error(404, "Not Found");
       },
       {
         query: getGenericQuerySchema({
@@ -278,7 +305,7 @@ const main = async () => {
 
         const result = await SunatAPI.getTaxComplianceVerificationPeriods(
           token,
-          "140000",
+          BookCode.Purchases,
         );
         if (!result.ok) {
           log.error(
@@ -710,20 +737,20 @@ namespace SunatAPI {
    */
   queryProcesses.raw = rawQueryProcesses;
 
-  interface RequestPurchasingManagementProposalInputs {
+  interface RequestSalesAndRevenueManagementProposalInputs {
     tax_period: string;
   }
 
-  export interface RequestPurchasingManagementProposalData {
+  export interface RequestSalesAndRevenueManagementProposalData {
     ticket_id: string;
   }
 
   /**
    * @description Returns the ticket number so you can query the process in background while is being dispatched by the SUNAT platform.
    */
-  export const requestPurchasingManagementProposal = async (
+  export const requestSalesAndRevenueManagementProposal = async (
     sunatToken: string,
-    inputs: RequestPurchasingManagementProposalInputs,
+    inputs: RequestSalesAndRevenueManagementProposalInputs,
   ): Promise<
     Result<
       RequestPurchasingManagementProposalData,
@@ -765,23 +792,23 @@ namespace SunatAPI {
     return Result.ok({ ticket_id: body.numTicket });
   };
 
-  interface RequestSalesAndRevenueManagementProposalInputs {
+  interface RequestPurchasingManagementProposalInputs {
     tax_period: string;
   }
 
-  interface RequestSalesAndRevenueManagementProposalData {
+  interface RequestPurchasingManagementProposalData {
     ticket_id: string;
   }
 
   /**
    * @description Returns the ticket number so you can query the process in background while is being dispatched by the SUNAT platform.
    */
-  export const requestSalesAndRevenueManagementProposal = async (
+  export const requestPurchasingManagementProposal = async (
     sunatToken: string,
-    inputs: RequestSalesAndRevenueManagementProposalInputs,
+    inputs: RequestPurchasingManagementProposalInputs,
   ): Promise<
     Result<
-      RequestSalesAndRevenueManagementProposalData,
+      RequestPurchasingManagementProposalData,
       "no_ticket_in_response" | "bad_response"
     >
   > => {
@@ -829,25 +856,91 @@ namespace SunatAPI {
     return Result.ok({ ticket_id: body.numTicket });
   };
 
-  interface GetProcessedIGVProposalInputs {
+  interface GetProcessedProposalInputs {
     report_file: {
       code_type: string;
       name: string;
     };
     process_code: string;
-    book_code: BookCode;
     tax_period: string;
     ticket_id: string;
   }
 
-  export const getProcessedIGVProposal = async (
+  export const getProcessedIncomesProposal = async (
     sunatToken: string,
-    inputs: GetProcessedIGVProposalInputs,
-  ) => {
+    inputs: GetProcessedProposalInputs,
+  ): Promise<
+    Result<PurchaseRecord[], "bad_response" | "could_not_retrieve_csv">
+  > => {
+    const result = await getProcessedIGVProposal(
+      sunatToken,
+      BookCode.Purchases,
+      inputs,
+    );
+    if (!result.ok) return result;
+
+    const [, ...rows] = result.value.split("\n");
+
+    const results: Array<PurchaseRecord> = [];
+
+    for (const row of rows) {
+      const columns = row.split(",");
+      if (columns.length < 40) {
+        continue;
+      }
+
+      results.push({
+        ruc: columns[0],
+        names: columns[1],
+        tax_period: columns[2],
+        car_sunat: columns[3],
+        issue_date: columns[4],
+        due_date: columns[5] ?? null,
+        document_type: columns[6].padStart(2, "0") as ProofOfPaymentCode,
+        document_series: columns[7],
+        year: columns[8] ?? null,
+        initial_document_number: columns[9] ?? null,
+        final_document_number: columns[10] ?? null,
+        identity_document_type: columns[11] as EntityDocumentTypeCode,
+        identity_document_number: columns[12],
+        client_name: columns[13],
+        taxable_base_dg: Number.parseFloat(columns[14]),
+        igv_dg: Number.parseFloat(columns[15]),
+        taxable_base_dgng: Number.parseFloat(columns[16]),
+        igv_dgng: Number.parseFloat(columns[17]),
+        taxable_base_dng: Number.parseFloat(columns[18]),
+        igv_dng: Number.parseFloat(columns[19]),
+        acquisition_value_ng: Number.parseFloat(columns[20]),
+        isc: Number.parseFloat(columns[21]),
+        icbper: Number.parseFloat(columns[22]),
+        other_taxes: Number.parseFloat(columns[23]),
+        total_amount: Number.parseFloat(columns[24]),
+        currency: columns[25] as KnownCurrenciesAndMore,
+        exchange_rate: Number.parseFloat(columns[26]),
+        imb: Number.parseFloat(columns[35]),
+        origin_indicator: columns[36] ?? null,
+        detraction: columns[37] ? Number.parseFloat(columns[37]) : null,
+        note_type: columns[38] ?? null,
+        invoice_status: columns[39] as InvoiceStatusCode,
+        incal: columns[40] ?? null,
+      });
+    }
+
+    return Result.ok(results);
+  };
+
+  /**
+   * @description Returns the CSV data for the provided IGV proposal.
+   */
+  const getProcessedIGVProposal = async (
+    sunatToken: string,
+    bookCode: BookCode,
+    inputs: GetProcessedProposalInputs,
+  ): Promise<Result<string, "bad_response" | "could_not_retrieve_csv">> => {
     const params = new URLSearchParams({
       nomArchivoReporte: inputs.report_file.name,
       codTipoArchivoReporte: inputs.report_file.code_type,
-      codLibro: inputs.book_code,
+      codLibro: bookCode,
       perTributario: inputs.tax_period,
       codProceso: inputs.process_code,
       numTicket: inputs.ticket_id,
@@ -864,18 +957,19 @@ namespace SunatAPI {
       body: null,
       method: "GET",
     });
-
-    // const compressedData = await response.arrayBuffer();
-    // Bun.write("data.zip", new Uint8Array(compressedData));
+    if (!response.ok) {
+      return Result.notok("bad_response");
+    }
 
     const compressedData = await response.arrayBuffer();
     const zip = new AdmZip(Buffer.from(compressedData));
 
     for (const entry of zip.getEntries()) {
-      console.log(`Extracting: ${entry.entryName}`);
       const content = entry.getData().toString("utf8");
-      console.log(content);
+      return Result.ok(content);
     }
+
+    return Result.notok("could_not_retrieve_csv");
   };
 }
 
