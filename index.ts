@@ -4,6 +4,7 @@ import { pluginGracefulServer } from "graceful-server-elysia";
 import { chromium } from "playwright";
 import { Elysia, t } from "elysia";
 import NodeCache from "node-cache";
+import AdmZip from "adm-zip";
 
 const DEFAULT_TIMEOUT_MS = 30000 * 5;
 
@@ -101,6 +102,8 @@ const main = async () => {
       log.warn("sunat token could not be retrieved");
       return null;
     }
+
+    console.log("token", token);
 
     const ok = cache.set(credentials.ruc, token);
     if (!ok) {
@@ -245,12 +248,14 @@ const main = async () => {
           return error(404, "Not Found");
         }
 
+        console.log("process", process);
+
         for (const file of process.files) {
           await SunatAPI.getProcessedIGVProposal(token, {
             book_code: "080000",
             process_code: process.process_code,
             report_file: {
-              code_type: process.process_status_code,
+              code_type: file.type_code,
               name: file.name,
             },
             tax_period,
@@ -854,14 +859,23 @@ namespace SunatAPI {
     const response = await fetch(`${endpoint}?${params}`, {
       headers: {
         ...genericHeaders,
-        authorization: `Bearer ${sunatToken}`,
+        Authorization: `Bearer ${sunatToken}`,
       },
       body: null,
       method: "GET",
     });
 
-    const data = await response.text();
-    console.log("data", data);
+    // const compressedData = await response.arrayBuffer();
+    // Bun.write("data.zip", new Uint8Array(compressedData));
+
+    const compressedData = await response.arrayBuffer();
+    const zip = new AdmZip(Buffer.from(compressedData));
+
+    for (const entry of zip.getEntries()) {
+      console.log(`Extracting: ${entry.entryName}`);
+      const content = entry.getData().toString("utf8");
+      console.log(content);
+    }
   };
 }
 
@@ -1025,14 +1039,3 @@ namespace Scraper {
 }
 
 await main();
-
-/**
- * const params = new URLSearchParams({
-    nomArchivoReporte: "LE2061036307620250110014040001EXP2.zip",
-    codTipoArchivoReporte: "00",
-    codLibro: "140000",
-    perTributario: "202412",
-    codProceso: "10",
-    numTicket: "20240300000062",
-  });
-  */

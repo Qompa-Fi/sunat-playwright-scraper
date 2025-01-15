@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@bogeychan/elysia-logger": "^0.1.7",
+    "@types/adm-zip": "0.5.7",
+    "adm-zip": "^0.5.16",
     "elysia": "^1.2.10",
     "graceful-server-elysia": "^1.0.25",
     "node-cache": "^5.1.2",
