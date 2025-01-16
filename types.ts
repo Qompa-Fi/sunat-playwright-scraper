@@ -380,3 +380,191 @@ export interface PurchaseRecord {
    */
   incal: string | null;
 }
+
+/**
+ * @description Codes according to SUNAT (https://www.sunat.gob.pe/legislacion/superin/2017/anexoVII-117-2017.pdf - Catálogo No. 51).
+ */
+export enum SaleTypeCode {
+  /**
+   * @description Common internal sale operation.
+   */
+  InternalSale = "0101",
+  /**
+   * @description Export operations (Exportación).
+   */
+  Export = "0102",
+  /**
+   * @description Operations with non-domiciled clients (No Domiciliados).
+   */
+  NonDomiciled = "0103",
+  /**
+   * @description Internal sales with advance payments (Venta Interna – Anticipos).
+   */
+  InternalSaleAdvance = "0104",
+  /**
+   * @description Itinerant sales (Venta Itinerante).
+   */
+  ItinerantSale = "0105",
+  /**
+   * @description Invoice and dispatch guide combined (Factura Guía).
+   */
+  InvoiceGuide = "0106",
+  /**
+   * @description Milled rice sale (Venta Arroz Pilado).
+   */
+  MilledRiceSale = "0107",
+  /**
+   * @description Invoice with perception receipt (Factura - Comprobante de Percepción).
+   */
+  InvoicePerception = "0108",
+  /**
+   * @description Invoice with sender guide (Factura - Guía remitente).
+   */
+  InvoiceSenderGuide = "0110",
+  /**
+   * @description Invoice with transporter guide (Factura - Guía transportista).
+   */
+  InvoiceTransporterGuide = "0111",
+}
+
+/**
+ * @description More information here https://www.sunat.gob.pe/legislacion/superin/2021/anexo-112-2021.pdf.
+ */
+export interface SalesRecord {
+  /**
+   * @description Original: "Ruc". - Taxpayer Identification Number.
+   */
+  ruc: string;
+  /**
+   * @description Original: "Razon Social". - Company or business name.
+   */
+  business_name: string;
+  /**
+   * @description Original: "Periodo". - The fiscal period, formatted as YYYYMM.
+   */
+  tax_period: string;
+  /**
+   * @description Original: "CAR SUNAT". - The SUNAT's registration annotation code.
+   */
+  car_sunat: string;
+  /**
+   * @description Original: "Fecha de emisión". - Issue date of the document.
+   */
+  issue_date: string;
+  /**
+   * @description Original: "Fecha Vcto/Pago". - Due date or payment date, null if missing.
+   */
+  due_date: string | null;
+  /**
+   * @description Original: "Tipo CP/Doc.". - Type of payment commitment or document, according to the codification approved by SUNAT.
+   */
+  document_type: ProofOfPaymentCode;
+  /**
+   * @description Original: "Serie del CDP". - Serial number of the payment voucher or cash register, as appropriate.
+   */
+  document_series: string;
+  /**
+   * @description Original: "Nro CP o Doc. Nro Inicial (Rango)". - Initial document number.
+   */
+  initial_document_number: string | null;
+  /**
+   * @description Original: "Nro Final (Rango)". - Final document number in range.
+   */
+  final_document_number: string | null;
+  /**
+   * @description Original: "Tipo Doc Identidad". - Type of identity document.
+   */
+  identity_document_type: EntityDocumentTypeCode;
+  /**
+   * @description Original: "Nro Doc Identidad". - Identity document number.
+   */
+  identity_document_number: string;
+  /**
+   * @description Original: "Apellidos Nombres/ Razón Social". - Client's name or business name.
+   */
+  client_name: string;
+  /**
+   * @description Original: "Valor Facturado Exportación". - Export invoiced value.
+   */
+  export_invoiced_value: number;
+  /**
+   * @description Original: "BI Gravada". - Taxable base amount.
+   */
+  taxable_base: number;
+  /**
+   * @description Original: "Dscto BI". - Discount on taxable base.
+   */
+  taxable_base_discount: number;
+  /**
+   * @description Original: "IGV / IPM". - General sales tax amount.
+   */
+  igv: number;
+  /**
+   * @description Original: "Dscto IGV / IPM". - Discount on IGV.
+   */
+  igv_discount: number;
+  /**
+   * @description Original: "Mto Exonerado". - Exempted amount.
+   */
+  exempted_amount: number;
+  /**
+   * @description Original: "Mto Inafecto". - Unaffected amount.
+   */
+  unaffected_amount: number;
+  /**
+   * @description Original: "ISC". - Selective Consumption Tax.
+   */
+  isc: number;
+  /**
+   * @description Original: "BI Grav IVAP". - Taxable base for IVAP (Rice Sales Tax).
+   */
+  ivap_taxable_base: number;
+  /**
+   * @description Original: "IVAP". - Rice Sales Tax amount.
+   */
+  ivap: number;
+  /**
+   * @description Original: "ICBPER". - Plastic bag tax amount.
+   */
+  icbper: number;
+  /**
+   * @description Original: "Otros Tributos". - Other taxes amount.
+   */
+  other_taxes: number;
+  /**
+   * @description Original: "Total CP". - Total document amount.
+   */
+  total_amount: number;
+  /**
+   * @description Original: "Moneda". - Currency code.
+   */
+  currency: KnownCurrenciesAndMore;
+  /**
+   * @description Original: "Tipo Cambio". - Exchange rate.
+   */
+  exchange_rate: number;
+  /**
+   * @description Original: "Tipo de Nota". - Note type, null if not applicable.
+   */
+  note_type: string | null;
+  /**
+   * @description Original: "Est. Comp". - Document status using InvoiceStatusCode enum.
+   */
+  invoice_status: InvoiceStatusCode;
+  /**
+   * @description Original: "Valor FOB Embarcado". - FOB value for exports.
+   */
+  fob_value: number;
+  /**
+   * @description Original: "Valor OP Gratuitas". - Value of free operations.
+   */
+  free_operations_value: number;
+  /**
+   * @description Original: "Tipo Operación". - Operation type code.
+   */
+  operation_type: SaleTypeCode;
+  /**
+   * @description Original: "DAM / CP". - Customs declaration number, null if not applicable.
+   */
+  customs_declaration: string | null;
+}

@@ -12,6 +12,8 @@ import type {
   KnownCurrenciesAndMore,
   ProofOfPaymentCode,
   PurchaseRecord,
+  SalesRecord,
+  SaleTypeCode,
 } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30000 * 5;
@@ -61,8 +63,8 @@ interface SunatCredentials {
 }
 
 enum BookCode {
-  Purchases = "140000",
-  SalesAndRevenues = "080000",
+  Purchases = "080000",
+  SalesAndRevenue = "140000",
 }
 
 const getGenericQuerySchema = (params?: {
@@ -82,7 +84,7 @@ const getGenericQuerySchema = (params?: {
   });
 
 const log = createPinoLogger({
-  level: "debug",
+  level: "trace",
   base: undefined,
 });
 
@@ -142,19 +144,18 @@ const main = async () => {
         }
       },
     })
-    .get(
-      "/sales-and-revenue-management",
+    .post(
+      "/sales-and-revenue-management/request-proposal",
       async ({ query, error }) => {
-        const { tax_period: taxPeriod, ...credentials } = query;
+        const { tax_period, ...credentials } = query;
 
         const token = await getSunatToken(credentials);
         if (!token) return error(500, "Internal Server Error");
 
-        const result = await SunatAPI.getTaxComplianceVerificationSummary(
+        const result = await SunatAPI.requestSalesAndRevenueManagementProposal(
           token,
           {
-            book_code: BookCode.SalesAndRevenues,
-            tax_period: taxPeriod,
+            tax_period,
           },
         );
 
@@ -168,19 +169,107 @@ const main = async () => {
           return error(500, "Internal Server Error");
         }
 
-        return { data: result.value };
+        return { ticket_id: result.value.ticket_id };
       },
       { query: getGenericQuerySchema({ withTaxPeriod: true }) },
     )
     .get(
-      "/sales-and-revenue-management/periods",
+      "/sales-and-revenue-management/proposal",
+      async ({ query, error }) => {
+        const { tax_period, ticket_id, ...credentials } = query;
+
+        const token = await getSunatToken(credentials);
+        if (!token) return error(500, "Internal Server Error");
+
+        const processesResult = await SunatAPI.queryProcesses(token, {
+          start_period: tax_period,
+          book_code: BookCode.SalesAndRevenue,
+        });
+        if (!processesResult.ok) {
+          log.error(
+            {
+              reason: processesResult.reason,
+            },
+            "something went wrong trying to fetch tax compliance verification summary...",
+          );
+          return error(500, "Internal Server Error");
+        }
+
+        const process = processesResult.value.items.find(
+          (item) => item.ticket_id === ticket_id,
+        );
+        if (!process) {
+          log.debug(
+            {
+              ticket_id: query.ticket_id,
+            },
+            "process not found",
+          );
+          return error(404, "Not Found");
+        }
+
+        log.trace(
+          {
+            process,
+            process_files_count: process.files ? process.files.length : 0,
+          },
+          "iterating over process files...",
+        );
+
+        if (!process.files) return error(404, "Not Found");
+
+        for (const file of process.files) {
+          const result = await SunatAPI.getProcessedSalesAndRevenuesProposal(
+            token,
+            {
+              process_code: process.process_code,
+              report_file: {
+                code_type: file.type_code,
+                name: file.name,
+              },
+              tax_period,
+              ticket_id,
+            },
+          );
+
+          if (!result.ok) {
+            log.error(
+              {
+                reason: result.reason,
+              },
+              "something went wrong trying to fetch tax compliance verification summary...",
+            );
+            return error(500, "Internal Server Error");
+          }
+
+          return { data: result.value };
+        }
+
+        log.debug(
+          {
+            ticket_id: query.ticket_id,
+          },
+          "process not found",
+        );
+
+        return error(404, "Not Found");
+      },
+      {
+        query: getGenericQuerySchema({
+          withTaxPeriod: true,
+          withTicketId: true,
+        }),
+      },
+    )
+    .get(
+      "/sales-and-revenue-management/tax-periods",
       async ({ query: credentials, error }) => {
         const token = await getSunatToken(credentials);
         if (!token) return error(500, "Internal Server Error");
 
         const result = await SunatAPI.getTaxComplianceVerificationPeriods(
           token,
-          BookCode.SalesAndRevenues,
+          BookCode.SalesAndRevenue,
         );
         if (!result.ok) {
           log.error(
@@ -260,9 +349,14 @@ const main = async () => {
         }
 
         log.trace(
-          { process, process_files_count: process.files.length },
+          {
+            process,
+            process_files_count: process.files ? process.files.length : 0,
+          },
           "iterating over process files...",
         );
+
+        if (!process.files) return error(404, "Not Found");
 
         for (const file of process.files) {
           const result = await SunatAPI.getProcessedIncomesProposal(token, {
@@ -467,7 +561,6 @@ namespace SunatAPI {
     });
 
     if (!response.ok) {
-      console.log("await response.text()", await response.text());
       return Result.notok("bad_response");
     }
 
@@ -560,11 +653,13 @@ namespace SunatAPI {
         delivery_status_label: string;
         report_file_name: string | null;
       };
-      files: {
-        type_code: string;
-        name: string;
-        target_name: string;
-      }[];
+      files:
+        | {
+            type_code: string;
+            name: string;
+            target_name: string;
+          }[]
+        | null;
       subprocesses:
         | {
             code: string;
@@ -643,13 +738,11 @@ namespace SunatAPI {
     count?: number;
   }
 
-  //! GESTIÓN DE VENTAS E INGRESOS ELECTRÓNICOS -> 140000
-  //! GESTIÓN DE COMPRAS -> 080000
-
   const rawQueryProcesses = async (
     sunatToken: string,
     inputs: QueryProcessesInputs,
   ): Promise<Result<RawQueryProcessesData, "bad_response">> => {
+    console.log("inputs", inputs);
     const params = new URLSearchParams({
       perIni: inputs.start_period,
       perFin: inputs.end_period ? inputs.end_period : inputs.start_period,
@@ -673,6 +766,8 @@ namespace SunatAPI {
     });
 
     if (!response.ok) {
+      const body = await response.json();
+      log.trace({ body }, "SunatAPI.queryProcesses.error");
       return Result.notok("bad_response");
     }
 
@@ -715,11 +810,13 @@ namespace SunatAPI {
           delivery_status_label: record.detalleTicket.desEstadoEnvio,
           report_file_name: record.detalleTicket.nomArchivoReporte,
         },
-        files: record.archivoReporte.map((file) => ({
-          type_code: file.codTipoAchivoReporte,
-          name: file.nomArchivoReporte,
-          target_name: file.nomArchivoContenido,
-        })),
+        files: record.archivoReporte
+          ? record.archivoReporte.map((file) => ({
+              type_code: file.codTipoAchivoReporte,
+              name: file.nomArchivoReporte,
+              target_name: file.nomArchivoContenido,
+            }))
+          : null,
         subprocesses: record.subProcesos
           ? record.subProcesos.map((sub) => ({
               code: sub.codTipoSubProceso,
@@ -759,11 +856,19 @@ namespace SunatAPI {
   > => {
     const EXPORT_AS_CSV_CODE = "1";
 
-    const endpoint = `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rce/propuesta/web/propuesta/${inputs.tax_period}/exportacioncomprobantepropuesta`;
+    const endpoint = `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rvie/propuesta/web/propuesta/${inputs.tax_period}/exportapropuesta`;
 
     const params = new URLSearchParams({
-      codTipoArchivo: EXPORT_AS_CSV_CODE,
       codOrigenEnvio: "1",
+      mtoTotalDesde: "",
+      mtoTotalHasta: "",
+      fecDocumentoDesde: "",
+      fecDocumentoHasta: "",
+      numRucAdquiriente: "",
+      numCarSunat: "",
+      codTipoCDP: "",
+      codTipoInconsistencia: "",
+      codTipoArchivo: EXPORT_AS_CSV_CODE,
     });
 
     const response = await fetch(`${endpoint}?${params}`, {
@@ -814,20 +919,12 @@ namespace SunatAPI {
   > => {
     const EXPORT_AS_CSV_CODE = "1";
 
-    const params = new URLSearchParams({
-      codOrigenEnvio: "1",
-      mtoTotalDesde: "",
-      mtoTotalHasta: "",
-      fecDocumentoDesde: "",
-      fecDocumentoHasta: "",
-      numRucAdquiriente: "",
-      numCarSunat: "",
-      codTipoCDP: "",
-      codTipoInconsistencia: "",
-      codTipoArchivo: EXPORT_AS_CSV_CODE,
-    });
+    const endpoint = `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rce/propuesta/web/propuesta/${inputs.tax_period}/exportacioncomprobantepropuesta`;
 
-    const endpoint = `https://api-sire.sunat.gob.pe/v1/contribuyente/migeigv/libros/rvie/propuesta/web/propuesta/${inputs.tax_period}/exportapropuesta`;
+    const params = new URLSearchParams({
+      codTipoArchivo: EXPORT_AS_CSV_CODE,
+      codOrigenEnvio: "1",
+    });
 
     const response = await fetch(`${endpoint}?${params}`, {
       headers: {
@@ -865,6 +962,72 @@ namespace SunatAPI {
     tax_period: string;
     ticket_id: string;
   }
+
+  export const getProcessedSalesAndRevenuesProposal = async (
+    sunatToken: string,
+    inputs: GetProcessedProposalInputs,
+  ): Promise<
+    Result<SalesRecord[], "bad_response" | "could_not_retrieve_csv">
+  > => {
+    const result = await getProcessedIGVProposal(
+      sunatToken,
+      BookCode.SalesAndRevenue,
+      inputs,
+    );
+    if (!result.ok) return result;
+
+    const results: Array<SalesRecord> = [];
+
+    const [, ...rows] = result.value.split("\n");
+
+    for (const row of rows) {
+      const columns = row.split(",");
+      if (columns.length < 38) {
+        continue;
+      }
+
+      results.push({
+        ruc: columns[0],
+        business_name: columns[1],
+        tax_period: columns[2],
+        car_sunat: columns[3],
+        issue_date: columns[4],
+        due_date: columns[5] ?? null,
+        document_type: columns[6].padStart(2, "0") as ProofOfPaymentCode,
+        document_series: columns[7],
+        initial_document_number: columns[8] ?? null,
+        final_document_number: columns[9] ?? null,
+        identity_document_type: columns[10] as EntityDocumentTypeCode,
+        identity_document_number: columns[11],
+        client_name: columns[12],
+        export_invoiced_value: Number.parseFloat(columns[13]),
+        taxable_base: Number.parseFloat(columns[14]),
+        taxable_base_discount: Number.parseFloat(columns[15]),
+        igv: Number.parseFloat(columns[16]),
+        igv_discount: Number.parseFloat(columns[17]),
+        exempted_amount: Number.parseFloat(columns[18]),
+        unaffected_amount: Number.parseFloat(columns[19]),
+        isc: Number.parseFloat(columns[20]),
+        ivap_taxable_base: Number.parseFloat(columns[21]),
+        ivap: Number.parseFloat(columns[22]),
+        icbper: Number.parseFloat(columns[23]),
+        other_taxes: Number.parseFloat(columns[24]),
+        total_amount: Number.parseFloat(columns[25]),
+        currency: columns[26] as KnownCurrenciesAndMore,
+        exchange_rate: Number.parseFloat(columns[27]),
+        note_type: columns[33] ?? null,
+        invoice_status: columns[34] as InvoiceStatusCode,
+        fob_value: Number.parseFloat(columns[35]),
+        free_operations_value: Number.parseFloat(columns[36]),
+        operation_type: columns[37] as SaleTypeCode,
+        customs_declaration: columns[38] ?? null,
+      });
+    }
+
+    console.log("results", results);
+
+    return Result.ok(results);
+  };
 
   export const getProcessedIncomesProposal = async (
     sunatToken: string,
@@ -937,6 +1100,7 @@ namespace SunatAPI {
     bookCode: BookCode,
     inputs: GetProcessedProposalInputs,
   ): Promise<Result<string, "bad_response" | "could_not_retrieve_csv">> => {
+    console.log("nao nao");
     const params = new URLSearchParams({
       nomArchivoReporte: inputs.report_file.name,
       codTipoArchivoReporte: inputs.report_file.code_type,
