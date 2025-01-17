@@ -425,7 +425,7 @@ const main = async () => {
         },
       }),
     )
-    .listen({ port: 8750, idleTimeout: 50 }, (c) =>
+    .listen({ port: process.env.PORT || 8750, idleTimeout: 50 }, (c) =>
       log.debug(`listening on port ${c.port}`),
     );
 };
