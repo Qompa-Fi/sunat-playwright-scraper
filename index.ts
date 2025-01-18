@@ -146,7 +146,7 @@ const main = async () => {
     })
     .post(
       "/sales-and-revenue-management/request-proposal",
-      async ({ query, error }) => {
+      async ({ query, error, path }) => {
         const { tax_period, ...credentials } = query;
 
         const token = await getSunatToken(credentials);
@@ -163,8 +163,9 @@ const main = async () => {
           log.error(
             {
               reason: result.reason,
+              path,
             },
-            "something went wrong trying to fetch tax compliance verification summary...",
+            "something went wrong...",
           );
           return error(500, "Internal Server Error");
         }
@@ -175,7 +176,7 @@ const main = async () => {
     )
     .get(
       "/sales-and-revenue-management/proposal",
-      async ({ query, error }) => {
+      async ({ query, error, path }) => {
         const { tax_period, ticket_id, ...credentials } = query;
 
         const token = await getSunatToken(credentials);
@@ -189,8 +190,9 @@ const main = async () => {
           log.error(
             {
               reason: processesResult.reason,
+              path,
             },
-            "something went wrong trying to fetch tax compliance verification summary...",
+            "something went wrong...",
           );
           return error(500, "Internal Server Error");
         }
@@ -236,8 +238,9 @@ const main = async () => {
             log.error(
               {
                 reason: result.reason,
+                path,
               },
-              "something went wrong trying to fetch tax compliance verification summary...",
+              "something went wrong...",
             );
             return error(500, "Internal Server Error");
           }
@@ -263,7 +266,7 @@ const main = async () => {
     )
     .get(
       "/sales-and-revenue-management/tax-periods",
-      async ({ query: credentials, error }) => {
+      async ({ query: credentials, error, path }) => {
         const token = await getSunatToken(credentials);
         if (!token) return error(500, "Internal Server Error");
 
@@ -275,8 +278,9 @@ const main = async () => {
           log.error(
             {
               reason: result.reason,
+              path,
             },
-            "something went wrong trying to fetch tax compliance verification summary...",
+            "something went wrong...",
           );
           return error(500, "Internal Server Error");
         }
@@ -287,7 +291,7 @@ const main = async () => {
     )
     .post(
       "/purchasing-management/request-proposal",
-      async ({ query, error }) => {
+      async ({ query, error, path }) => {
         const { tax_period, ...credentials } = query;
 
         const token = await getSunatToken(credentials);
@@ -303,8 +307,9 @@ const main = async () => {
           log.error(
             {
               reason: result.reason,
+              path,
             },
-            "something went wrong trying to fetch tax compliance verification summary...",
+            "something went wrong...",
           );
           return error(500, "Internal Server Error");
         }
@@ -315,7 +320,7 @@ const main = async () => {
     )
     .get(
       "purchasing-management/proposal",
-      async ({ query, error }) => {
+      async ({ query, error, path }) => {
         const { tax_period, ticket_id, ...credentials } = query;
 
         const token = await getSunatToken(credentials);
@@ -329,8 +334,9 @@ const main = async () => {
           log.error(
             {
               reason: processesResult.reason,
+              path,
             },
-            "something went wrong trying to fetch tax compliance verification summary...",
+            "something went wrong...",
           );
           return error(500, "Internal Server Error");
         }
@@ -373,8 +379,9 @@ const main = async () => {
             log.error(
               {
                 reason: result.reason,
+                path,
               },
-              "something went wrong trying to fetch tax compliance verification summary...",
+              "something went wrong...",
             );
             return error(500, "Internal Server Error");
           }
@@ -393,7 +400,7 @@ const main = async () => {
     )
     .get(
       "/purchasing-management/tax-periods",
-      async ({ query: credentials, error }) => {
+      async ({ query: credentials, error, path }) => {
         const token = await getSunatToken(credentials);
         if (!token) return error(500, "Internal Server Error");
 
@@ -405,8 +412,9 @@ const main = async () => {
           log.error(
             {
               reason: result.reason,
+              path,
             },
-            "something went wrong trying to fetch tax compliance verification summary...",
+            "something went wrong...",
           );
           return error(500, "Internal Server Error");
         }
@@ -468,6 +476,9 @@ namespace SunatAPI {
     });
 
     if (!response.ok) {
+      const body = await response.text();
+      log.trace({ body, url: response.url }, "response was not ok");
+
       return Result.notok("bad_response");
     }
 
@@ -561,6 +572,8 @@ namespace SunatAPI {
     });
 
     if (!response.ok) {
+      const body = await response.text();
+      log.trace({ body, url: response.url }, "response was not ok");
       return Result.notok("bad_response");
     }
 
@@ -767,7 +780,7 @@ namespace SunatAPI {
 
     if (!response.ok) {
       const body = await response.json();
-      log.trace({ body }, "SunatAPI.queryProcesses.error");
+      log.trace({ body, url: response.url }, "SunatAPI.queryProcesses.error");
       return Result.notok("bad_response");
     }
 
@@ -880,6 +893,8 @@ namespace SunatAPI {
       method: "GET",
     });
     if (!response.ok) {
+      const body = await response.text();
+      log.trace({ body, url: response.url }, "response was not ok");
       return Result.notok("bad_response");
     }
 
@@ -936,6 +951,8 @@ namespace SunatAPI {
     });
 
     if (!response.ok) {
+      const body = await response.text();
+      log.trace({ body, url: response.url }, "response was not ok");
       return Result.notok("bad_response");
     }
 
@@ -1024,8 +1041,6 @@ namespace SunatAPI {
       });
     }
 
-    console.log("results", results);
-
     return Result.ok(results);
   };
 
@@ -1100,7 +1115,6 @@ namespace SunatAPI {
     bookCode: BookCode,
     inputs: GetProcessedProposalInputs,
   ): Promise<Result<string, "bad_response" | "could_not_retrieve_csv">> => {
-    console.log("nao nao");
     const params = new URLSearchParams({
       nomArchivoReporte: inputs.report_file.name,
       codTipoArchivoReporte: inputs.report_file.code_type,
@@ -1122,6 +1136,8 @@ namespace SunatAPI {
       method: "GET",
     });
     if (!response.ok) {
+      const body = await response.text();
+      log.trace({ body, url: response.url }, "response was not ok");
       return Result.notok("bad_response");
     }
 
