@@ -1,7 +1,19 @@
 {
-  "name": "sunat-platform-extractor",
-  "module": "index.ts",
+  "name": "@qompa/sunat-playwright-scraper",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/types.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build"
+  },
   "devDependencies": {
     "@playwright/test": "^1.49.1",
     "@types/bun": "latest",
