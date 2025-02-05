@@ -144,6 +144,18 @@ const main = async () => {
         }
       },
     })
+    .get(
+      "/sunat-token",
+      async ({ query: credentials, error, path }) => {
+        log.trace({ ruc: credentials.ruc, path }, "retrieving sunat token...");
+
+        const token = await getSunatToken(credentials);
+        if (!token) return error(500, "Internal Server Error");
+
+        return { sunat_token: token };
+      },
+      { query: getGenericQuerySchema() },
+    )
     .post(
       "/sales-and-revenue-management/request-proposal",
       async ({ query, error, path }) => {
