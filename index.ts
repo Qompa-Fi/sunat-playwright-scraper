@@ -37,7 +37,7 @@ const log = createPinoLogger({
 const main = async () => {
   let browser: Browser | undefined;
 
-  const cache = new NodeCache({ stdTTL: 1 });
+  const cache = new NodeCache({ stdTTL: 60 * 59 });
 
   const appApiKey = process.env.APP_API_KEY;
   if (!appApiKey) {
