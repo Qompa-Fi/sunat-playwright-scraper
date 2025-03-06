@@ -44,20 +44,40 @@ const main = async () => {
     throw new Error("please set the API key");
   }
 
-  setInterval(async () => {
-    if (browser) {
-      const contextsCount = browser.contexts().length;
+let lastContextsCount = 0;
+let unchangedCount = 0;
 
-      log.trace(`[ripper] ${contextsCount} contexts are open...`);
+setInterval(async () => {
+  if (browser) {
+    const contextsCount = browser.contexts().length;
 
-      if (contextsCount === 0) {
-        log.trace("[ripper] closing browser...");
-        await browser.close({ reason: "is unused for now" });
-        browser = undefined;
-        log.trace("[ripper] browser was closed");
-      }
+    log.trace(`[ripper] ${contextsCount} contexts are open...`);
+
+    if (contextsCount === 0) {
+      log.trace("[ripper] closing browser...");
+      await browser.close({ reason: "is unused for now" });
+      browser = undefined;
+      log.trace("[ripper] browser was closed");
+      return;
     }
-  }, 1000 * 30);
+
+    if (contextsCount === lastContextsCount) {
+      unchangedCount++;
+    } else {
+      unchangedCount = 0;
+    }
+
+    lastContextsCount = contextsCount;
+
+    if (unchangedCount >= 2) { // 2 checks = 1 minute
+      log.trace("[ripper] contexts unchanged for too long, force closing browser...");
+      await browser.close({ reason: "stale contexts" });
+      browser = undefined;
+      log.trace("[ripper] browser was force closed");
+    }
+  }
+}, 1000 * 30);
+
 
   const getSunatToken = async (
     credentials: SunatCredentials,
@@ -91,7 +111,7 @@ const main = async () => {
       log.warn({ ruc: credentials.ruc }, "token could not be set to cache");
     }
 
-    log.trace(`[end] ${browser.contexts().length} contexts are open...`);
+    log.trace(`[end] ${browser.contexts().length} contexts are open...`);1
 
     return token;
   };
