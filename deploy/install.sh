@@ -26,6 +26,7 @@ ExecStart=/usr/bin/xvfb-run -a bun dist/index.js
 Restart=always
 Environment=NODE_ENV=production
 Environment=PATH=/home/luisnquin/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RuntimeMaxSec=3m
 
 [Install]
 WantedBy=multi-user.target
