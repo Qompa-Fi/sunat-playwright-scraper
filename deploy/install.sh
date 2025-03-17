@@ -23,6 +23,7 @@ After=network.target
 User=luisnquin
 WorkingDirectory=/home/luisnquin/app
 ExecStart=/usr/bin/xvfb-run -a bun dist/index.js
+ExecStop=/usr/bin/rm -rf /tmp/playwright*
 Restart=always
 Environment=NODE_ENV=production
 Environment=PATH=/home/luisnquin/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
