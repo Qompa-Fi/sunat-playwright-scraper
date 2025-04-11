@@ -35,3 +35,5 @@ EOF
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now sunat-scraper
+
+echo "0 * * * * rm -rf /tmp/playwright* /tmp/xvfb* && systemctl restart sunat-scraper.service" | sudo crontab -
