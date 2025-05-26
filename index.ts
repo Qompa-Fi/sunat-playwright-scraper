@@ -44,40 +44,42 @@ const main = async () => {
     throw new Error("please set the API key");
   }
 
-let lastContextsCount = 0;
-let unchangedCount = 0;
+  let lastContextsCount = 0;
+  let unchangedCount = 0;
 
-setInterval(async () => {
-  if (browser) {
-    const contextsCount = browser.contexts().length;
+  setInterval(async () => {
+    if (browser) {
+      const contextsCount = browser.contexts().length;
 
-    log.trace(`[ripper] ${contextsCount} contexts are open...`);
+      log.trace(`[ripper] ${contextsCount} contexts are open...`);
 
-    if (contextsCount === 0) {
-      log.trace("[ripper] closing browser...");
-      await browser.close({ reason: "is unused for now" });
-      browser = undefined;
-      log.trace("[ripper] browser was closed");
-      return;
+      if (contextsCount === 0) {
+        log.trace("[ripper] closing browser...");
+        await browser.close({ reason: "is unused for now" });
+        browser = undefined;
+        log.trace("[ripper] browser was closed");
+        return;
+      }
+
+      if (contextsCount === lastContextsCount) {
+        unchangedCount++;
+      } else {
+        unchangedCount = 0;
+      }
+
+      lastContextsCount = contextsCount;
+
+      if (unchangedCount >= 2) {
+        // 2 checks = 1 minute
+        log.trace(
+          "[ripper] contexts unchanged for too long, force closing browser...",
+        );
+        await browser.close({ reason: "stale contexts" });
+        browser = undefined;
+        log.trace("[ripper] browser was force closed");
+      }
     }
-
-    if (contextsCount === lastContextsCount) {
-      unchangedCount++;
-    } else {
-      unchangedCount = 0;
-    }
-
-    lastContextsCount = contextsCount;
-
-    if (unchangedCount >= 2) { // 2 checks = 1 minute
-      log.trace("[ripper] contexts unchanged for too long, force closing browser...");
-      await browser.close({ reason: "stale contexts" });
-      browser = undefined;
-      log.trace("[ripper] browser was force closed");
-    }
-  }
-}, 1000 * 30);
-
+  }, 1000 * 30);
 
   const getSunatToken = async (
     credentials: SunatCredentials,
@@ -93,6 +95,7 @@ setInterval(async () => {
         headless: false,
         executablePath: process.env.PLAYWRIGHT_LAUNCH_OPTIONS_EXECUTABLE_PATH,
         timeout: DEFAULT_TIMEOUT_MS,
+        args: ["--disable-gpu"],
       });
     } else {
       log.trace(`[init] ${browser.contexts().length} contexts are open...`);
@@ -111,7 +114,7 @@ setInterval(async () => {
       log.warn({ ruc: credentials.ruc }, "token could not be set to cache");
     }
 
-    log.trace(`[end] ${browser.contexts().length} contexts are open...`);1
+    log.trace(`[end] ${browser.contexts().length} contexts are open...`);
 
     return token;
   };
