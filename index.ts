@@ -83,8 +83,11 @@ const main = async () => {
 
   const getSunatToken = async (
     credentials: SunatCredentials,
+    legacy: boolean,
   ): Promise<string | null> => {
-    const cachedToken = cache.get<string>(credentials.ruc);
+    const cacheKey = credentials.ruc + legacy;
+
+    const cachedToken = cache.get<string>(cacheKey);
     if (cachedToken) {
       return cachedToken;
     }
@@ -101,7 +104,9 @@ const main = async () => {
       log.trace(`[init] ${browser.contexts().length} contexts are open...`);
     }
 
-    const token = await Scraper.getSunatToken(browser, credentials);
+    const token = await (legacy
+      ? Scraper.getSunatToken(browser, credentials)
+      : Scraper.getSunatTokenV2(browser, credentials));
     if (!token) {
       log.warn("sunat token could not be retrieved");
       return null;
@@ -109,7 +114,7 @@ const main = async () => {
 
     log.debug("sunat token was retrieved, saving it to cache...", { token });
 
-    const ok = cache.set(credentials.ruc, token);
+    const ok = cache.set(cacheKey, token);
     if (!ok) {
       log.warn({ ruc: credentials.ruc }, "token could not be set to cache");
     }
@@ -142,7 +147,19 @@ const main = async () => {
       async ({ query: credentials, error, path }) => {
         log.trace({ ruc: credentials.ruc, path }, "retrieving sunat token...");
 
-        const token = await getSunatToken(credentials);
+        const token = await getSunatToken(credentials, true);
+        if (!token) return error(500, "Internal Server Error");
+
+        return { sunat_token: token };
+      },
+      { query: getGenericQuerySchema() },
+    )
+    .get(
+      "/sunat-token/v2",
+      async ({ query: credentials, error, path }) => {
+        log.trace({ ruc: credentials.ruc, path }, "retrieving sunat token...");
+
+        const token = await getSunatToken(credentials, false);
         if (!token) return error(500, "Internal Server Error");
 
         return { sunat_token: token };
@@ -214,6 +231,61 @@ namespace Scraper {
         window.sessionStorage.getItem("SUNAT.token"),
       );
       await page.close();
+
+      if (!sunatToken) {
+        return null;
+      }
+
+      return sunatToken;
+    };
+
+    try {
+      return await huntToken();
+    } catch (error) {
+      log.error(
+        { error },
+        "got error while hunting sunat token, closing page...",
+      );
+      await page.close();
+      log.trace("page was closed");
+      return null;
+    }
+  };
+
+  export const getSunatTokenV2 = async (
+    browser: Browser,
+    credentials: SunatCredentials,
+  ) => {
+    log.trace("creating new page...");
+    const page = await browser.newPage();
+
+    log.trace("new page was created, navigating to sunat menu...");
+
+    const huntToken = async () => {
+      await page.goto(
+        "https://e-menu.sunat.gob.pe/cl-ti-itmenu2/MenuInternetPlataforma.htm?exe=55.1.1.1.1",
+        {
+          waitUntil: "networkidle",
+        },
+      );
+
+      await page.waitForLoadState("networkidle");
+
+      log.debug("handling login...");
+      await handleLogin(page, credentials);
+
+      const title = await page.title();
+      if (title !== "SUNAT - Menú SOL") {
+        throw new Error(`Unexpected page title: ${title}`);
+      }
+
+      // Esperar a que el iframe se cargue en iDivApplication
+      await page.waitForSelector("#iDivApplication iframe");
+      const rawHTML = await page.content();
+      await page.close();
+      const tokenRegex = /var\s+token\s*=\s*"([^"]+)"/;
+      const match = rawHTML.match(tokenRegex);
+      const sunatToken = match ? match[1] : null;
 
       if (!sunatToken) {
         return null;
