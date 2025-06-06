@@ -182,11 +182,13 @@ namespace Scraper {
 
     const huntToken = async () => {
       await page.goto(
-        "https://e-menu.sunat.gob.pe/cl-ti-itmenu/MenuInternet.htm",
+        "https://e-menu.sunat.gob.pe/cl-ti-itmenu2/MenuInternetPlataforma.htm?exe=55.1.1.1.1",
         {
           waitUntil: "networkidle",
         },
       );
+
+      await page.waitForLoadState("networkidle");
 
       log.debug("handling login...");
       await handleLogin(page, credentials);
@@ -196,24 +198,13 @@ namespace Scraper {
         throw new Error(`Unexpected page title: ${title}`);
       }
 
-      log.debug("mitigating possible redundant menu items...");
-      await mitigateRedundantMenuItems(page);
-
-      log.debug("navigating to electronic sales and revenue management...");
-      await menuToElectronicSalesAndRevenueManagement(page);
-
-      const anyFrame = page.frame({ url: /ww1.sunat.gob.pe/ });
-      if (!anyFrame) {
-        throw new Error("frame for ww1.sunat.gob.pe was not found");
-      }
-
-      await anyFrame.goto("https://e-factura.sunat.gob.pe");
-      await anyFrame.waitForLoadState("networkidle");
-
-      const sunatToken = await anyFrame.evaluate(async () =>
-        window.sessionStorage.getItem("SUNAT.token"),
-      );
+      // Esperar a que el iframe se cargue en iDivApplication
+      await page.waitForSelector("#iDivApplication iframe");
+      const rawHTML = await page.content();
       await page.close();
+      const tokenRegex = /var\s+token\s*=\s*"([^"]+)"/;
+      const match = rawHTML.match(tokenRegex);
+      const sunatToken = match ? match[1] : null;
 
       if (!sunatToken) {
         return null;
