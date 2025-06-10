@@ -5,7 +5,6 @@ import { chromium } from "playwright";
 import { v4 as uuidv4 } from "uuid";
 import { Elysia, t } from "elysia";
 import NodeCache from "node-cache";
-import { sleep } from "bun";
 import Redis from "ioredis";
 import {
   createPinoLogger,
@@ -20,6 +19,10 @@ import {
 
 if (!process.env.APP_REDIS_CONNECTION_URL) {
   throw new Error("please set the Redis connection URL");
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const redis = new Redis(process.env.APP_REDIS_CONNECTION_URL, {
