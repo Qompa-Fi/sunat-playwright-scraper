@@ -5,6 +5,7 @@ import { chromium } from "playwright";
 import { v4 as uuidv4 } from "uuid";
 import { Elysia, t } from "elysia";
 import NodeCache from "node-cache";
+import { sleep } from "bun";
 import Redis from "ioredis";
 import {
   createPinoLogger,
@@ -16,7 +17,6 @@ import {
   type GetSunatTokenResult,
   type GetSunatTokenPayload,
 } from "./scraper";
-import { sleep } from "bun";
 
 if (!process.env.APP_REDIS_CONNECTION_URL) {
   throw new Error("please set the Redis connection URL");
@@ -38,7 +38,8 @@ const rateLimiter = new RateLimiterRedis({
 });
 
 const DEFAULT_TIMEOUT_MS = 30000 * 5;
-const TICKET_TTL = 1800; // 30 minutes
+const PAYLOAD_TTL = 2400; // 40m
+const RESULT_TTL = 1800; // 30m
 const QUEUE_KEY = "scraping_queue";
 const TICKET_PREFIX = "ticket:";
 const MAX_CONCURRENT_WORKERS = process.env.MAX_CONCURRENT_WORKERS
@@ -127,14 +128,14 @@ const main = async () => {
             `${cacheKeyPrefix}:result`,
             JSON.stringify(result),
             "EX",
-            TICKET_TTL,
+            RESULT_TTL,
           );
         } else {
           await redis.set(
             `${cacheKeyPrefix}:error`,
             "failed to get token",
             "EX",
-            TICKET_TTL,
+            RESULT_TTL,
           );
         }
       } catch (err) {
@@ -149,7 +150,7 @@ const main = async () => {
           `${cacheKeyPrefix}:error`,
           "internal server error",
           "EX",
-          TICKET_TTL,
+          RESULT_TTL,
         );
       }
 
@@ -231,7 +232,7 @@ const main = async () => {
           const key = `${TICKET_PREFIX}${ticketId}:payload`;
           const payload = JSON.stringify(body);
 
-          await redis.set(key, payload, "EX", TICKET_TTL);
+          await redis.set(key, payload, "EX", PAYLOAD_TTL);
           await redis.rpush(QUEUE_KEY, ticketId);
 
           return { ticket_id: ticketId, status: "pending" };
