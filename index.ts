@@ -68,8 +68,8 @@ const main = async () => {
   ): Promise<GetSunatTokenResult | null> => {
     const cacheKey = `${payload.ruc}:${payload.targets.join("%")}`;
 
-    const cachedToken = cache.get<GetSunatTokenResult>(cacheKey);
-    if (cachedToken) return cachedToken;
+    const cachedTokens = cache.get<GetSunatTokenResult>(cacheKey);
+    if (cachedTokens) return cachedTokens;
 
     if (!browser) {
       logger.trace("launching new browser...");
@@ -83,7 +83,7 @@ const main = async () => {
       logger.trace(`[init] ${browser.contexts().length} contexts are open...`);
     }
 
-    const result = await scraper.getSunatToken(logger, browser, payload);
+    const result = await scraper.getSunatTokens(logger, browser, payload);
     if (!result) {
       logger.warn("sunat token could not be retrieved");
       return null;
@@ -257,7 +257,7 @@ const main = async () => {
             t.Union([
               t.Literal("sire"),
               t.Literal("cpe"),
-              t.Literal("new-platform"),
+              t.Literal("unified-platform"),
             ]),
           ),
         }),

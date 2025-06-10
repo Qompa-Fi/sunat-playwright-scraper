@@ -1,13 +1,18 @@
 import type { Browser, ElementHandle, Page } from "playwright";
 import type { Logger } from "@bogeychan/elysia-logger/types";
 
-export type GetSunatTokenTargets = "sire" | "cpe" | "new-platform";
+export type GetSunatTokenTargets = "sire" | "cpe" | "unified-platform";
 
-export interface GetSunatTokenResult {
+interface GetSunatLegacyResult {
   sire: string | null;
   cpe: string | null;
-  new_platform: string | null;
 }
+
+interface GetSunatLTSResult {
+  unified_platform: string | null;
+}
+
+export type GetSunatTokenResult = GetSunatLegacyResult & GetSunatLTSResult;
 
 export interface GetSunatTokenPayload {
   sol_username: string;
@@ -17,17 +22,44 @@ export interface GetSunatTokenPayload {
 }
 
 export namespace scraper {
-  export const getSunatToken = async (
+  export const getSunatTokens = async (
     logger: Logger,
     browser: Browser,
     payload: GetSunatTokenPayload,
   ): Promise<GetSunatTokenResult | null> => {
     logger.trace("creating new page...");
+
+    let legacyTokens: GetSunatLegacyResult | null = null;
+    let ltsTokens: GetSunatLTSResult | null = null;
+
+    if (payload.targets.includes("cpe") || payload.targets.includes("sire")) {
+      legacyTokens = await resolveLegacyTokens(logger, browser, payload);
+    }
+
+    if (payload.targets.includes("unified-platform")) {
+      ltsTokens = await resolveLTSTokens(logger, browser, payload);
+    }
+
+    return {
+      cpe: null,
+      sire: null,
+      unified_platform: null,
+      ...legacyTokens,
+      ...ltsTokens,
+    };
+  };
+
+  const resolveLegacyTokens = async (
+    logger: Logger,
+    browser: Browser,
+    payload: GetSunatTokenPayload,
+  ): Promise<GetSunatLegacyResult | null> => {
+    logger.trace("creating new page...");
     const page = await browser.newPage();
 
     logger.trace("new page was created, navigating to sunat menu...");
 
-    const huntToken = async () => {
+    const hunt = async () => {
       await page.goto(
         "https://e-menu.sunat.gob.pe/cl-ti-itmenu/MenuInternet.htm",
         {
@@ -46,49 +78,88 @@ export namespace scraper {
       logger.debug("mitigating possible redundant menu items...");
       await mitigateRedundantMenuItems(logger, page);
 
-      logger.debug("navigating to electronic sales and revenue management...");
-      await menuToElectronicSalesAndRevenueManagement(page);
+      const resolveToken = async (): Promise<string | null> => {
+        const anyFrame = page.frame({ url: /ww1.sunat.gob.pe/ });
+        if (!anyFrame) {
+          throw new Error("frame for ww1.sunat.gob.pe was not found");
+        }
 
-      const anyFrame = page.frame({ url: /ww1.sunat.gob.pe/ });
-      if (!anyFrame) {
-        throw new Error("frame for ww1.sunat.gob.pe was not found");
+        await anyFrame.goto("https://e-factura.sunat.gob.pe");
+        await anyFrame.waitForLoadState("networkidle");
+
+        return await anyFrame.evaluate(async () =>
+          window.sessionStorage.getItem("SUNAT.token"),
+        );
+      };
+
+      const goBack = async () => {
+        const backButton = page.getByRole("button", { name: "Ir al inicio" });
+        await backButton.click();
+      };
+
+      let sireToken: string | null = null;
+      let cpeToken: string | null = null;
+
+      if (payload.targets.includes("sire")) {
+        try {
+          logger.debug("resolving SIRE token...");
+          await goToSireMenu(page);
+
+          sireToken = await resolveToken();
+        } catch (err) {
+          logger.error(
+            {
+              error: err instanceof Error ? err.message : JSON.stringify(err),
+            },
+            "got error while resolving SIRE token, skipping...",
+          );
+        } finally {
+          logger.trace("done");
+        }
       }
 
-      await anyFrame.goto("https://e-factura.sunat.gob.pe");
-      await anyFrame.waitForLoadState("networkidle");
+      await goBack();
 
-      const sunatToken = await anyFrame.evaluate(async () =>
-        window.sessionStorage.getItem("SUNAT.token"),
-      );
-      await page.close();
+      if (payload.targets.includes("cpe")) {
+        try {
+          logger.debug("resolving CPE token...");
+          await goToCpeMenu(page);
 
-      if (!sunatToken) return null;
+          cpeToken = await resolveToken();
+        } catch (err) {
+          logger.error(
+            {
+              error: err instanceof Error ? err.message : JSON.stringify(err),
+            },
+            "got error while resolving CPE token, skipping...",
+          );
+        } finally {
+          logger.trace("done");
+        }
+      }
 
-      return {
-        sire: sunatToken,
-        cpe: null,
-        new_platform: null,
-      };
+      return { sire: sireToken, cpe: cpeToken };
     };
 
     try {
-      return await huntToken();
+      return await hunt();
     } catch (error) {
       logger.error(
         { error },
         "got error while hunting sunat token, closing page...",
       );
+      return null;
+    } finally {
       await page.close();
       logger.trace("page was closed");
-      return null;
     }
   };
 
-  export const getSunatTokenV2 = async (
+  const resolveLTSTokens = async (
     logger: Logger,
     browser: Browser,
     credentials: GetSunatTokenPayload,
-  ) => {
+  ): Promise<GetSunatLTSResult | null> => {
     logger.trace("creating new page...");
     const page = await browser.newPage();
 
@@ -124,7 +195,7 @@ export namespace scraper {
         return null;
       }
 
-      return sunatToken;
+      return { unified_platform: sunatToken };
     };
 
     try {
@@ -140,7 +211,32 @@ export namespace scraper {
     }
   };
 
-  const menuToElectronicSalesAndRevenueManagement = async (menuPage: Page) => {
+  const goToCpeMenu = async (menuPage: Page) => {
+    const must$ = async (selector: string) =>
+      await pageMust$(menuPage, selector);
+
+    const service2Option = await must$("#divOpcionServicio2");
+    await service2Option.click();
+
+    // Click first level
+    await menuPage.click("#nivel1_11");
+    await menuPage.waitForSelector("#nivel2_11_38", { state: "visible" });
+
+    // Click second level
+    await menuPage.click("#nivel2_11_38");
+    await menuPage.waitForSelector("#nivel3_11_38_1", { state: "visible" });
+
+    // Click third level
+    await menuPage.click("#nivel3_11_38_1");
+    await menuPage.waitForSelector("#nivel4_11_38_1_1_1", { state: "visible" });
+
+    // Click fourth level (Nueva Consulta de comprobantes de pago)
+    await menuPage.click("#nivel4_11_38_1_1_1");
+
+    await menuPage.waitForLoadState("networkidle");
+  };
+
+  const goToSireMenu = async (menuPage: Page) => {
     const must$ = async (selector: string) =>
       await pageMust$(menuPage, selector);
 
@@ -151,10 +247,10 @@ export namespace scraper {
     const sireOption = menuPage.getByText(SIRE_LABEL);
     await sireOption.click();
 
-    const sireElectronicRecords = await must$(
+    const sireLevel2 = await must$(
       "#nivel1Cuerpo_60 .nivel2 .spanNivelDescripcion", // AKA Registros Electronicos
     );
-    await sireElectronicRecords.click();
+    await sireLevel2.click();
 
     await menuPage
       .getByText("Registro de Ventas e Ingresos Electronico")
