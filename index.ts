@@ -44,6 +44,7 @@ const TICKET_PREFIX = "ticket:";
 const MAX_CONCURRENT_WORKERS = process.env.MAX_CONCURRENT_WORKERS
   ? Number.parseInt(process.env.MAX_CONCURRENT_WORKERS)
   : 3;
+const REUSE_TICKET_TTL_THRESHOLD = 600; // 10m
 
 const logger = createPinoLogger({
   level: "trace",
@@ -160,6 +161,35 @@ const main = async () => {
 
   setInterval(processQueue, 1000);
 
+  const findExistingTicket = async (
+    payload: GetSunatTokenPayload,
+  ): Promise<string | null> => {
+    const pattern = `${TICKET_PREFIX}*:payload`;
+    const keys = await redis.keys(pattern);
+
+    for (const key of keys) {
+      const ticketId = key.split(":")[1];
+      const existingPayload = await redis.get(key);
+
+      if (!existingPayload) continue;
+
+      const parsedPayload: GetSunatTokenPayload = JSON.parse(existingPayload);
+      if (JSON.stringify(parsedPayload) === JSON.stringify(payload)) {
+        // Check if the ticket has a result and if it's still valid
+        const ttl = await redis.ttl(key);
+        if (ttl > 0 && ttl < REUSE_TICKET_TTL_THRESHOLD) {
+          const resultKey = `${TICKET_PREFIX}${ticketId}:result`;
+          const result = await redis.get(resultKey);
+          if (result) {
+            return ticketId;
+          }
+        }
+      }
+    }
+
+    return null;
+  };
+
   const app = new Elysia()
     .use(
       loggerMiddleware({ level: "debug", autoLogging: true, base: undefined }),
@@ -185,6 +215,16 @@ const main = async () => {
       async ({ body, error }) => {
         try {
           await rateLimiter.consume(body.ruc);
+
+          // Check for existing ticket with same payload
+          const existingTicketId = await findExistingTicket(body);
+          if (existingTicketId) {
+            logger.debug(
+              { ticket_id: existingTicketId },
+              "reusing existing ticket with same payload",
+            );
+            return { ticket_id: existingTicketId, status: "reused" };
+          }
 
           const ticketId = uuidv4();
 
