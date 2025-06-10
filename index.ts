@@ -1,17 +1,17 @@
-import { createPinoLogger, logger } from "@bogeychan/elysia-logger";
-import type { Browser, ElementHandle, Page } from "playwright";
 import { pluginGracefulServer } from "graceful-server-elysia";
+import type { Browser } from "playwright";
 import { chromium } from "playwright";
 import { Elysia, t } from "elysia";
 import NodeCache from "node-cache";
+import {
+  createPinoLogger,
+  logger as loggerMiddleware,
+} from "@bogeychan/elysia-logger";
+
+import type { SunatCredentials } from "./types";
+import { scraper } from "./scraper";
 
 const DEFAULT_TIMEOUT_MS = 30000 * 5;
-
-interface SunatCredentials {
-  sol_username: string;
-  sol_key: string;
-  ruc: string;
-}
 
 const getGenericQuerySchema = (params?: {
   withTaxPeriod?: boolean;
@@ -29,7 +29,7 @@ const getGenericQuerySchema = (params?: {
     }),
   });
 
-const log = createPinoLogger({
+const logger = createPinoLogger({
   level: "trace",
   base: undefined,
 });
@@ -51,13 +51,13 @@ const main = async () => {
     if (browser) {
       const contextsCount = browser.contexts().length;
 
-      log.trace(`[ripper] ${contextsCount} contexts are open...`);
+      logger.trace(`[ripper] ${contextsCount} contexts are open...`);
 
       if (contextsCount === 0) {
-        log.trace("[ripper] closing browser...");
+        logger.trace("[ripper] closing browser...");
         await browser.close({ reason: "is unused for now" });
         browser = undefined;
-        log.trace("[ripper] browser was closed");
+        logger.trace("[ripper] browser was closed");
         return;
       }
 
@@ -71,12 +71,12 @@ const main = async () => {
 
       if (unchangedCount >= 2) {
         // 2 checks = 1 minute
-        log.trace(
+        logger.trace(
           "[ripper] contexts unchanged for too long, force closing browser...",
         );
         await browser.close({ reason: "stale contexts" });
         browser = undefined;
-        log.trace("[ripper] browser was force closed");
+        logger.trace("[ripper] browser was force closed");
       }
     }
   }, 1000 * 30);
@@ -93,7 +93,7 @@ const main = async () => {
     }
 
     if (!browser) {
-      log.trace("launching new browser...");
+      logger.trace("launching new browser...");
       browser = await chromium.launch({
         headless: false,
         executablePath: process.env.PLAYWRIGHT_LAUNCH_OPTIONS_EXECUTABLE_PATH,
@@ -101,43 +101,45 @@ const main = async () => {
         args: ["--disable-gpu"],
       });
     } else {
-      log.trace(`[init] ${browser.contexts().length} contexts are open...`);
+      logger.trace(`[init] ${browser.contexts().length} contexts are open...`);
     }
 
     const token = await (legacy
-      ? Scraper.getSunatToken(browser, credentials)
-      : Scraper.getSunatTokenV2(browser, credentials));
+      ? scraper.getSunatToken(logger, browser, credentials)
+      : scraper.getSunatTokenV2(logger, browser, credentials));
     if (!token) {
-      log.warn("sunat token could not be retrieved");
+      logger.warn("sunat token could not be retrieved");
       return null;
     }
 
-    log.debug("sunat token was retrieved, saving it to cache...", { token });
+    logger.debug("sunat token was retrieved, saving it to cache...", { token });
 
     const ok = cache.set(cacheKey, token);
     if (!ok) {
-      log.warn({ ruc: credentials.ruc }, "token could not be set to cache");
+      logger.warn({ ruc: credentials.ruc }, "token could not be set to cache");
     }
 
-    log.trace(`[end] ${browser.contexts().length} contexts are open...`);
+    logger.trace(`[end] ${browser.contexts().length} contexts are open...`);
 
     return token;
   };
 
   const app = new Elysia()
-    .use(logger({ level: "debug", autoLogging: true, base: undefined }))
+    .use(
+      loggerMiddleware({ level: "debug", autoLogging: true, base: undefined }),
+    )
     .guard({
       beforeHandle: async ({ headers, path, error }) => {
-        log.debug({ path }, "new request was received");
+        logger.debug({ path }, "new request was received");
 
         const apiKey = headers["x-api-key"];
         if (!apiKey) {
-          log.warn('missing "X-API-Key" header');
+          logger.warn('missing "X-API-Key" header');
           return error(401, "Unauthorized");
         }
 
         if (!apiKey || apiKey !== appApiKey) {
-          log.warn('invalid "X-API-Key" header');
+          logger.warn('invalid "X-API-Key" header');
           return error(401, "Unauthorized");
         }
       },
@@ -145,7 +147,10 @@ const main = async () => {
     .get(
       "/sunat-token",
       async ({ query: credentials, error, path }) => {
-        log.trace({ ruc: credentials.ruc, path }, "retrieving sunat token...");
+        logger.trace(
+          { ruc: credentials.ruc, path },
+          "retrieving sunat token...",
+        );
 
         const token = await getSunatToken(credentials, true);
         if (!token) return error(500, "Internal Server Error");
@@ -157,7 +162,10 @@ const main = async () => {
     .get(
       "/sunat-token/v2",
       async ({ query: credentials, error, path }) => {
-        log.trace({ ruc: credentials.ruc, path }, "retrieving sunat token...");
+        logger.trace(
+          { ruc: credentials.ruc, path },
+          "retrieving sunat token...",
+        );
 
         const token = await getSunatToken(credentials, false);
         if (!token) return error(500, "Internal Server Error");
@@ -172,249 +180,19 @@ const main = async () => {
       pluginGracefulServer({
         onShutdown: async () => {
           if (browser) {
-            log.debug("closing browser...");
+            logger.debug("closing browser...");
             await browser.close();
             browser = undefined;
             return;
           }
 
-          log.debug("browser was already closed!");
+          logger.debug("browser was already closed!");
         },
       }),
     )
     .listen({ port: process.env.PORT || 8750, idleTimeout: 50 }, (c) =>
-      log.debug(`listening on port ${c.port}`),
+      logger.debug(`listening on port ${c.port}`),
     );
 };
-
-namespace Scraper {
-  export const getSunatToken = async (
-    browser: Browser,
-    credentials: SunatCredentials,
-  ): Promise<string | null> => {
-    log.trace("creating new page...");
-    const page = await browser.newPage();
-
-    log.trace("new page was created, navigating to sunat menu...");
-
-    const huntToken = async () => {
-      await page.goto(
-        "https://e-menu.sunat.gob.pe/cl-ti-itmenu/MenuInternet.htm",
-        {
-          waitUntil: "networkidle",
-        },
-      );
-
-      log.debug("handling login...");
-      await handleLogin(page, credentials);
-
-      const title = await page.title();
-      if (title !== "SUNAT - Menú SOL") {
-        throw new Error(`Unexpected page title: ${title}`);
-      }
-
-      log.debug("mitigating possible redundant menu items...");
-      await mitigateRedundantMenuItems(page);
-
-      log.debug("navigating to electronic sales and revenue management...");
-      await menuToElectronicSalesAndRevenueManagement(page);
-
-      const anyFrame = page.frame({ url: /ww1.sunat.gob.pe/ });
-      if (!anyFrame) {
-        throw new Error("frame for ww1.sunat.gob.pe was not found");
-      }
-
-      await anyFrame.goto("https://e-factura.sunat.gob.pe");
-      await anyFrame.waitForLoadState("networkidle");
-
-      const sunatToken = await anyFrame.evaluate(async () =>
-        window.sessionStorage.getItem("SUNAT.token"),
-      );
-      await page.close();
-
-      if (!sunatToken) {
-        return null;
-      }
-
-      return sunatToken;
-    };
-
-    try {
-      return await huntToken();
-    } catch (error) {
-      log.error(
-        { error },
-        "got error while hunting sunat token, closing page...",
-      );
-      await page.close();
-      log.trace("page was closed");
-      return null;
-    }
-  };
-
-  export const getSunatTokenV2 = async (
-    browser: Browser,
-    credentials: SunatCredentials,
-  ) => {
-    log.trace("creating new page...");
-    const page = await browser.newPage();
-
-    log.trace("new page was created, navigating to sunat menu...");
-
-    const huntToken = async () => {
-      await page.goto(
-        "https://e-menu.sunat.gob.pe/cl-ti-itmenu2/MenuInternetPlataforma.htm?exe=55.1.1.1.1",
-        {
-          waitUntil: "networkidle",
-        },
-      );
-
-      await page.waitForLoadState("networkidle");
-
-      log.debug("handling login...");
-      await handleLogin(page, credentials);
-
-      const title = await page.title();
-      if (title !== "SUNAT - Menú SOL") {
-        throw new Error(`Unexpected page title: ${title}`);
-      }
-
-      // Esperar a que el iframe se cargue en iDivApplication
-      await page.waitForSelector("#iDivApplication iframe");
-      const rawHTML = await page.content();
-      await page.close();
-      const tokenRegex = /var\s+token\s*=\s*"([^"]+)"/;
-      const match = rawHTML.match(tokenRegex);
-      const sunatToken = match ? match[1] : null;
-
-      if (!sunatToken) {
-        return null;
-      }
-
-      return sunatToken;
-    };
-
-    try {
-      return await huntToken();
-    } catch (error) {
-      log.error(
-        { error },
-        "got error while hunting sunat token, closing page...",
-      );
-      await page.close();
-      log.trace("page was closed");
-      return null;
-    }
-  };
-
-  const menuToElectronicSalesAndRevenueManagement = async (menuPage: Page) => {
-    const must$ = async (selector: string) =>
-      await pageMust$(menuPage, selector);
-
-    const service2Option = await must$("#divOpcionServicio2");
-    await service2Option.click();
-
-    const SIRE_LABEL = "Sistema Integrado de Registros Electronicos";
-    const sireOption = menuPage.getByText(SIRE_LABEL);
-    await sireOption.click();
-
-    const sireElectronicRecords = await must$(
-      "#nivel1Cuerpo_60 .nivel2 .spanNivelDescripcion", // AKA Registros Electronicos
-    );
-    await sireElectronicRecords.click();
-
-    await menuPage
-      .getByText("Registro de Ventas e Ingresos Electronico")
-      .click();
-    await menuPage
-      .getByText("Gestión de Ventas e Ingresos Electrónicos")
-      .click();
-
-    await menuPage.waitForLoadState("networkidle");
-
-    const appFrame = menuPage.frameLocator("#iframeApplication");
-    if (!appFrame) throw new Error("main frame not found");
-
-    const adviceModal = appFrame.getByText("×", { exact: true }); // if advice modal is open
-    const isAdviceModalOpen = await adviceModal.isVisible();
-    if (isAdviceModalOpen) await adviceModal.click();
-  };
-
-  const pageMust$ = async (
-    page: Page,
-    selector: string,
-  ): Promise<ElementHandle<SVGElement | HTMLElement>> => {
-    const element = await page.$(selector);
-    if (!element) throw new Error(`Element not found: ${selector}`);
-    return element;
-  };
-
-  const handleLogin = async (
-    loginPage: Page,
-    credentials: SunatCredentials,
-  ) => {
-    const must$ = async (selector: string) =>
-      await pageMust$(loginPage, selector);
-
-    const rucInput = await must$("#txtRuc");
-    await rucInput.click();
-    await rucInput.fill(credentials.ruc);
-
-    const solUsernameInput = await must$("#txtUsuario");
-    await solUsernameInput.click();
-    await solUsernameInput.fill(credentials.sol_username);
-
-    const solKeyInput = await must$("#txtContrasena");
-    await solKeyInput.click();
-    await solKeyInput.fill(credentials.sol_key);
-
-    const submitButton = await must$("#btnAceptar");
-    await submitButton.click();
-  };
-
-  const mitigateRedundantMenuItems = async (menuPage: Page) => {
-    await menuPage.waitForLoadState("networkidle");
-
-    const campaignFrame = menuPage.frameLocator("#ifrVCE");
-
-    const secondaryModalLocator = campaignFrame.locator(
-      "#modalInformativoSecundario",
-    );
-    const SECONDARY_MODAL_TITLE = "Informativo";
-    const suggestionLocator = secondaryModalLocator.getByText(
-      SECONDARY_MODAL_TITLE,
-    );
-
-    let suggestionInnerText = "";
-
-    try {
-      suggestionInnerText = await suggestionLocator.innerText({
-        timeout: 3000,
-      });
-    } catch (error) {
-      log.debug(
-        "skipping mitigation...",
-        error instanceof Error ? error.message : error,
-      );
-      return;
-    }
-
-    const secondaryModalExists =
-      suggestionInnerText.trim() === SECONDARY_MODAL_TITLE;
-
-    if (secondaryModalExists) {
-      const submitButton = campaignFrame.getByRole("button", {
-        name: /Finalizar/i,
-      });
-      await submitButton.click();
-    }
-
-    log.debug("skipping secondary modal...");
-
-    const skipButton = campaignFrame.getByText("Continuar sin confirmar");
-
-    await skipButton.click({ timeout: 3000 });
-  };
-}
 
 await main();
