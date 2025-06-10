@@ -29,6 +29,7 @@
     "adm-zip": "^0.5.16",
     "elysia": "^1.2.10",
     "graceful-server-elysia": "^1.0.25",
+    "ioredis": "^5.6.1",
     "node-cache": "^5.1.2",
     "playwright": "^1.49.1",
     "rate-limiter-flexible": "^3.0.0",
