@@ -1,33 +1,49 @@
 import { pluginGracefulServer } from "graceful-server-elysia";
+import { RateLimiterRedis } from "rate-limiter-flexible";
 import type { Browser } from "playwright";
 import { chromium } from "playwright";
+import { v4 as uuidv4 } from "uuid";
 import { Elysia, t } from "elysia";
 import NodeCache from "node-cache";
+import Redis from "ioredis";
 import {
   createPinoLogger,
   logger as loggerMiddleware,
 } from "@bogeychan/elysia-logger";
 
-import type { SunatCredentials } from "./types";
-import { scraper } from "./scraper";
+import {
+  scraper,
+  type GetSunatTokenResult,
+  type GetSunatTokenPayload,
+} from "./scraper";
+import { sleep } from "bun";
+
+if (!process.env.APP_REDIS_CONNECTION_URL) {
+  throw new Error("please set the Redis connection URL");
+}
+
+const redis = new Redis(process.env.APP_REDIS_CONNECTION_URL, {
+  retryStrategy: (times) => {
+    const delay = Math.min(times * 50, 2000);
+    return delay;
+  },
+});
+
+const rateLimiter = new RateLimiterRedis({
+  storeClient: redis,
+  keyPrefix: "rate_limit",
+  points: 10,
+  duration: 60,
+  blockDuration: 60,
+});
 
 const DEFAULT_TIMEOUT_MS = 30000 * 5;
-
-const getGenericQuerySchema = (params?: {
-  withTaxPeriod?: boolean;
-  withTicketId?: boolean;
-}) =>
-  t.Object({
-    sol_username: t.String({ minLength: 3, maxLength: 8 }),
-    sol_key: t.String({ minLength: 2, maxLength: 12 }),
-    ruc: t.String({ minLength: 11, maxLength: 11 }),
-    ...(params?.withTaxPeriod && {
-      tax_period: t.String({ minLength: 6, maxLength: 6 }),
-    }),
-    ...(params?.withTicketId && {
-      ticket_id: t.String({ minLength: 10, maxLength: 45 }),
-    }),
-  });
+const TICKET_TTL = 1800; // 30 minutes
+const QUEUE_KEY = "scraping_queue";
+const TICKET_PREFIX = "ticket:";
+const MAX_CONCURRENT_WORKERS = process.env.MAX_CONCURRENT_WORKERS
+  ? Number.parseInt(process.env.MAX_CONCURRENT_WORKERS)
+  : 3;
 
 const logger = createPinoLogger({
   level: "trace",
@@ -36,6 +52,7 @@ const logger = createPinoLogger({
 
 const main = async () => {
   let browser: Browser | undefined;
+  let activeWorkers = 0;
 
   const cache = new NodeCache({ stdTTL: 60 * 59 });
 
@@ -44,53 +61,13 @@ const main = async () => {
     throw new Error("please set the API key");
   }
 
-  let lastContextsCount = 0;
-  let unchangedCount = 0;
+  const resolveSunatTokens = async (
+    payload: GetSunatTokenPayload,
+  ): Promise<GetSunatTokenResult | null> => {
+    const cacheKey = `${payload.ruc}:${payload.targets.join("%")}`;
 
-  setInterval(async () => {
-    if (browser) {
-      const contextsCount = browser.contexts().length;
-
-      logger.trace(`[ripper] ${contextsCount} contexts are open...`);
-
-      if (contextsCount === 0) {
-        logger.trace("[ripper] closing browser...");
-        await browser.close({ reason: "is unused for now" });
-        browser = undefined;
-        logger.trace("[ripper] browser was closed");
-        return;
-      }
-
-      if (contextsCount === lastContextsCount) {
-        unchangedCount++;
-      } else {
-        unchangedCount = 0;
-      }
-
-      lastContextsCount = contextsCount;
-
-      if (unchangedCount >= 2) {
-        // 2 checks = 1 minute
-        logger.trace(
-          "[ripper] contexts unchanged for too long, force closing browser...",
-        );
-        await browser.close({ reason: "stale contexts" });
-        browser = undefined;
-        logger.trace("[ripper] browser was force closed");
-      }
-    }
-  }, 1000 * 30);
-
-  const getSunatToken = async (
-    credentials: SunatCredentials,
-    legacy: boolean,
-  ): Promise<string | null> => {
-    const cacheKey = credentials.ruc + legacy;
-
-    const cachedToken = cache.get<string>(cacheKey);
-    if (cachedToken) {
-      return cachedToken;
-    }
+    const cachedToken = cache.get<GetSunatTokenResult>(cacheKey);
+    if (cachedToken) return cachedToken;
 
     if (!browser) {
       logger.trace("launching new browser...");
@@ -104,25 +81,84 @@ const main = async () => {
       logger.trace(`[init] ${browser.contexts().length} contexts are open...`);
     }
 
-    const token = await (legacy
-      ? scraper.getSunatToken(logger, browser, credentials)
-      : scraper.getSunatTokenV2(logger, browser, credentials));
-    if (!token) {
+    const result = await scraper.getSunatToken(logger, browser, payload);
+    if (!result) {
       logger.warn("sunat token could not be retrieved");
       return null;
     }
 
-    logger.debug("sunat token was retrieved, saving it to cache...", { token });
+    logger.debug("sunat token was retrieved, saving it to cache...", {
+      ...result,
+    });
 
-    const ok = cache.set(cacheKey, token);
+    const ok = cache.set(cacheKey, result);
     if (!ok) {
-      logger.warn({ ruc: credentials.ruc }, "token could not be set to cache");
+      logger.warn({ ruc: payload.ruc }, "token could not be set to cache");
     }
 
     logger.trace(`[end] ${browser.contexts().length} contexts are open...`);
 
-    return token;
+    return result;
   };
+
+  const processQueue = async () => {
+    if (activeWorkers >= MAX_CONCURRENT_WORKERS) return;
+    activeWorkers++;
+
+    try {
+      const ticketId = await redis.lpop(QUEUE_KEY);
+      if (!ticketId) return;
+
+      console.log("ticket id to process is...", ticketId);
+
+      const cacheKeyPrefix = `${TICKET_PREFIX}${ticketId}`;
+
+      const rawPayload = await redis.get(`${cacheKeyPrefix}:payload`);
+      if (!rawPayload) return;
+
+      const payload: GetSunatTokenPayload = JSON.parse(rawPayload);
+
+      try {
+        const result = await resolveSunatTokens(payload);
+
+        if (result) {
+          await redis.set(
+            `${cacheKeyPrefix}:result`,
+            JSON.stringify(result),
+            "EX",
+            TICKET_TTL,
+          );
+        } else {
+          await redis.set(
+            `${cacheKeyPrefix}:error`,
+            "failed to get token",
+            "EX",
+            TICKET_TTL,
+          );
+        }
+      } catch (err) {
+        logger.error(
+          {
+            error: err instanceof Error ? err.message : JSON.stringify(err),
+            ticket_id: ticketId,
+          },
+          "error processing ticket",
+        );
+        await redis.set(
+          `${cacheKeyPrefix}:error`,
+          "internal server error",
+          "EX",
+          TICKET_TTL,
+        );
+      }
+
+      await sleep(800);
+    } finally {
+      activeWorkers--;
+    }
+  };
+
+  setInterval(processQueue, 1000);
 
   const app = new Elysia()
     .use(
@@ -144,35 +180,83 @@ const main = async () => {
         }
       },
     })
-    .get(
-      "/sunat-token",
-      async ({ query: credentials, error, path }) => {
-        logger.trace(
-          { ruc: credentials.ruc, path },
-          "retrieving sunat token...",
-        );
+    .post(
+      "/create-ticket",
+      async ({ body, error }) => {
+        try {
+          await rateLimiter.consume(body.ruc);
 
-        const token = await getSunatToken(credentials, true);
-        if (!token) return error(500, "Internal Server Error");
+          const ticketId = uuidv4();
 
-        return { sunat_token: token };
+          const key = `${TICKET_PREFIX}${ticketId}:payload`;
+          const payload = JSON.stringify(body);
+
+          await redis.set(key, payload, "EX", TICKET_TTL);
+          await redis.rpush(QUEUE_KEY, ticketId);
+
+          return { ticket_id: ticketId, status: "pending" };
+        } catch (err) {
+          if (
+            err instanceof Error &&
+            err.message.includes("Too Many Requests")
+          ) {
+            return error(429, "Too Many Requests");
+          }
+
+          logger.error({ error: err }, "error creating ticket");
+          return error(500, "Internal Server Error");
+        }
       },
-      { query: getGenericQuerySchema() },
+      {
+        body: t.Object({
+          sol_username: t.String({ minLength: 3, maxLength: 8 }),
+          sol_key: t.String({ minLength: 2, maxLength: 12 }),
+          ruc: t.String({ minLength: 11, maxLength: 11 }),
+          targets: t.Array(
+            t.Union([
+              t.Literal("sire"),
+              t.Literal("cpe"),
+              t.Literal("new-platform"),
+            ]),
+          ),
+        }),
+      },
     )
     .get(
-      "/sunat-token/v2",
-      async ({ query: credentials, error, path }) => {
-        logger.trace(
-          { ruc: credentials.ruc, path },
-          "retrieving sunat token...",
-        );
+      "/get-token",
+      async ({ query: { ticket_id: ticketId }, error }) => {
+        try {
+          const cacheKeyPrefix = `${TICKET_PREFIX}${ticketId}`;
 
-        const token = await getSunatToken(credentials, false);
-        if (!token) return error(500, "Internal Server Error");
+          const payloadExists = await redis.exists(`${cacheKeyPrefix}:payload`);
+          if (!payloadExists) {
+            return error(404, { status: "error", message: "ticket not found" });
+          }
 
-        return { sunat_token: token };
+          const errorMsg = await redis.get(`${cacheKeyPrefix}:error`);
+          if (errorMsg) {
+            return error(500, { status: "error", message: errorMsg });
+          }
+
+          const result = await redis.get(`${cacheKeyPrefix}:result`);
+          if (result) {
+            return { status: "ok", sunat_token: JSON.parse(result) };
+          }
+
+          return { status: "pending", sunat_token: null };
+        } catch (err: unknown) {
+          logger.error(
+            { error: err, ticketId },
+            "Error checking ticket status",
+          );
+          return error(500, "Internal Server Error");
+        }
       },
-      { query: getGenericQuerySchema() },
+      {
+        query: t.Object({
+          ticket_id: t.String(),
+        }),
+      },
     );
 
   app

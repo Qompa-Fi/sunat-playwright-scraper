@@ -1,14 +1,27 @@
 import type { Browser, ElementHandle, Page } from "playwright";
-
-import type { SunatCredentials } from "./types";
 import type { Logger } from "@bogeychan/elysia-logger/types";
+
+export type GetSunatTokenTargets = "sire" | "cpe" | "new-platform";
+
+export interface GetSunatTokenResult {
+  sire: string | null;
+  cpe: string | null;
+  new_platform: string | null;
+}
+
+export interface GetSunatTokenPayload {
+  sol_username: string;
+  sol_key: string;
+  ruc: string;
+  targets: GetSunatTokenTargets[];
+}
 
 export namespace scraper {
   export const getSunatToken = async (
     logger: Logger,
     browser: Browser,
-    credentials: SunatCredentials,
-  ): Promise<string | null> => {
+    payload: GetSunatTokenPayload,
+  ): Promise<GetSunatTokenResult | null> => {
     logger.trace("creating new page...");
     const page = await browser.newPage();
 
@@ -23,7 +36,7 @@ export namespace scraper {
       );
 
       logger.debug("handling login...");
-      await handleLogin(page, credentials);
+      await handleLogin(page, payload);
 
       const title = await page.title();
       if (title !== "SUNAT - Menú SOL") {
@@ -49,11 +62,13 @@ export namespace scraper {
       );
       await page.close();
 
-      if (!sunatToken) {
-        return null;
-      }
+      if (!sunatToken) return null;
 
-      return sunatToken;
+      return {
+        sire: sunatToken,
+        cpe: null,
+        new_platform: null,
+      };
     };
 
     try {
@@ -72,7 +87,7 @@ export namespace scraper {
   export const getSunatTokenV2 = async (
     logger: Logger,
     browser: Browser,
-    credentials: SunatCredentials,
+    credentials: GetSunatTokenPayload,
   ) => {
     logger.trace("creating new page...");
     const page = await browser.newPage();
@@ -169,22 +184,22 @@ export namespace scraper {
 
   const handleLogin = async (
     loginPage: Page,
-    credentials: SunatCredentials,
+    payload: GetSunatTokenPayload,
   ) => {
     const must$ = async (selector: string) =>
       await pageMust$(loginPage, selector);
 
     const rucInput = await must$("#txtRuc");
     await rucInput.click();
-    await rucInput.fill(credentials.ruc);
+    await rucInput.fill(payload.ruc);
 
     const solUsernameInput = await must$("#txtUsuario");
     await solUsernameInput.click();
-    await solUsernameInput.fill(credentials.sol_username);
+    await solUsernameInput.fill(payload.sol_username);
 
     const solKeyInput = await must$("#txtContrasena");
     await solKeyInput.click();
-    await solKeyInput.fill(credentials.sol_key);
+    await solKeyInput.fill(payload.sol_key);
 
     const submitButton = await must$("#btnAceptar");
     await submitButton.click();
