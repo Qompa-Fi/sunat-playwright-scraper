@@ -66,6 +66,8 @@ const logger = createPinoLogger({
   base: undefined,
 });
 
+const ticketRetries = new Map<string, number>();
+
 const main = async () => {
   let browser: Browser | undefined;
   let activeWorkers = 0;
@@ -79,13 +81,16 @@ const main = async () => {
 
   const resolveSunatTokens = async (
     payload: GetSunatTokenPayload,
+    useCache = true,
   ): Promise<GetSunatTokenResult | null> => {
     const cacheKey = `${payload.ruc}:${payload.targets.join("%")}`;
 
-    const cachedTokens = cache.get<GetSunatTokenResult>(cacheKey);
-    if (cachedTokens) {
-      logger.debug({ cacheKey, cachedTokens }, "Returning cached tokens");
-      return cachedTokens;
+    if (useCache) {
+      const cachedTokens = cache.get<GetSunatTokenResult>(cacheKey);
+      if (cachedTokens) {
+        logger.debug({ cacheKey, cachedTokens }, "Returning cached tokens");
+        return cachedTokens;
+      }
     }
 
     if (!browser) {
@@ -147,13 +152,45 @@ const main = async () => {
         logger.debug({ ticketId, result }, "result from resolveSunatTokens");
 
         if (result) {
-          await redis.set(
-            `${cacheKeyPrefix}:result`,
-            JSON.stringify(result),
-            "EX",
-            RESULT_TTL,
-          );
-          logger.info({ ticketId }, "result set in Redis");
+          logger.debug({ ticketId, result }, "saving result to Redis");
+
+          let retries = ticketRetries.get(ticketId) || 0;
+
+          while (!areTargetsFulfilled(result, payload.targets) && retries < 3) {
+            retries += 1;
+            ticketRetries.set(ticketId, retries);
+            logger.warn(
+              { ticketId, retries },
+              `not all requested targets could be resolved, retrying immediately (${retries}/3)`,
+            );
+
+            const retryResult = await resolveSunatTokens(payload, false);
+            if (retryResult) {
+              Object.assign(result, retryResult);
+            }
+          }
+          if (areTargetsFulfilled(result, payload.targets)) {
+            ticketRetries.delete(ticketId);
+            await redis.set(
+              `${cacheKeyPrefix}:result`,
+              JSON.stringify(result),
+              "EX",
+              RESULT_TTL,
+            );
+            logger.trace({ ticketId }, "saved");
+          } else {
+            ticketRetries.delete(ticketId);
+            await redis.set(
+              `${cacheKeyPrefix}:error`,
+              "not all requested targets could be resolved",
+              "EX",
+              RESULT_TTL,
+            );
+            logger.warn(
+              { ticketId, retries },
+              "not all requested targets could be resolved after 3 retries, error set in Redis",
+            );
+          }
         } else {
           await redis.set(
             `${cacheKeyPrefix}:error`,
