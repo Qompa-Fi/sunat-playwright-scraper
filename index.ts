@@ -243,8 +243,11 @@ const main = async () => {
           const key = `${TICKET_PREFIX}${ticketId}:payload`;
           const payload = JSON.stringify(body);
 
-          await redis.set(key, payload, "EX", PAYLOAD_TTL);
-          await redis.rpush(QUEUE_KEY, ticketId);
+          await redis
+            .multi()
+            .set(key, payload, "EX", PAYLOAD_TTL)
+            .rpush(QUEUE_KEY, ticketId)
+            .exec();
 
           return { ticket_id: ticketId, status: "pending" };
         } catch (err) {
