@@ -83,7 +83,10 @@ const main = async () => {
     const cacheKey = `${payload.ruc}:${payload.targets.join("%")}`;
 
     const cachedTokens = cache.get<GetSunatTokenResult>(cacheKey);
-    if (cachedTokens) return cachedTokens;
+    if (cachedTokens) {
+      logger.debug({ cacheKey, cachedTokens }, "Returning cached tokens");
+      return cachedTokens;
+    }
 
     if (!browser) {
       logger.trace("launching new browser...");
@@ -97,6 +100,7 @@ const main = async () => {
       logger.trace(`[init] ${browser.contexts().length} contexts are open...`);
     }
 
+    logger.debug({ payload }, "Calling scraper.getSunatTokens");
     const result = await scraper.getSunatTokens(logger, browser, payload);
     if (!result) {
       logger.warn("sunat token could not be retrieved");
@@ -125,17 +129,22 @@ const main = async () => {
       const ticketId = await redis.lpop(QUEUE_KEY);
       if (!ticketId) return;
 
-      console.log("ticket id to process is...", ticketId);
+      logger.info({ ticketId }, "processing ticket");
 
       const cacheKeyPrefix = `${TICKET_PREFIX}${ticketId}`;
 
       const rawPayload = await redis.get(`${cacheKeyPrefix}:payload`);
-      if (!rawPayload) return;
+      if (!rawPayload) {
+        logger.error({ ticketId }, "payload not found for ticket");
+        return;
+      }
 
       const payload: GetSunatTokenPayload = JSON.parse(rawPayload);
+      logger.debug({ ticketId, payload }, "fetched payload for ticket");
 
       try {
         const result = await resolveSunatTokens(payload);
+        logger.debug({ ticketId, result }, "result from resolveSunatTokens");
 
         if (result) {
           await redis.set(
@@ -144,6 +153,7 @@ const main = async () => {
             "EX",
             RESULT_TTL,
           );
+          logger.info({ ticketId }, "result set in Redis");
         } else {
           await redis.set(
             `${cacheKeyPrefix}:error`,
@@ -151,14 +161,18 @@ const main = async () => {
             "EX",
             RESULT_TTL,
           );
+          logger.warn({ ticketId }, "failed to get token, error set in Redis");
         }
       } catch (err) {
         logger.error(
           {
-            error: err instanceof Error ? err.message : JSON.stringify(err),
+            error:
+              err instanceof Error
+                ? err.stack || err.message
+                : JSON.stringify(err),
             ticket_id: ticketId,
           },
-          "error processing ticket",
+          "error processing ticket (exception)",
         );
         await redis.set(
           `${cacheKeyPrefix}:error`,
