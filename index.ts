@@ -1,5 +1,4 @@
 import { pluginGracefulServer } from "graceful-server-elysia";
-import { RateLimiterRedis } from "rate-limiter-flexible";
 import type { Browser } from "playwright";
 import { chromium } from "playwright";
 import { v4 as uuidv4 } from "uuid";
@@ -30,14 +29,6 @@ const redis = new Redis(process.env.APP_REDIS_CONNECTION_URL, {
     const delay = Math.min(times * 50, 2000);
     return delay;
   },
-});
-
-const rateLimiter = new RateLimiterRedis({
-  storeClient: redis,
-  keyPrefix: "rate_limit",
-  points: 10,
-  duration: 60,
-  blockDuration: 60,
 });
 
 const DEFAULT_TIMEOUT_MS = 30000 * 5;
@@ -218,9 +209,6 @@ const main = async () => {
       "/create-ticket",
       async ({ body, error }) => {
         try {
-          await rateLimiter.consume(body.ruc);
-
-          // Check for existing ticket with same payload
           const existingTicketId = await findExistingTicket(body);
           if (existingTicketId) {
             logger.debug(
