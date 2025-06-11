@@ -1,5 +1,6 @@
 import { pluginGracefulServer } from "graceful-server-elysia";
 import type { Browser } from "playwright";
+import type { ElysiaWS } from "elysia/ws";
 import { chromium } from "playwright";
 import { v4 as uuidv4 } from "uuid";
 import { Elysia, t } from "elysia";
@@ -130,6 +131,12 @@ const main = async () => {
     if (activeWorkers >= MAX_CONCURRENT_WORKERS) return;
     activeWorkers++;
 
+    const notifyViaWs = (ticketId: string) => {
+      for (const client of wsClients) {
+        if (client.readyState === 1) client.send(ticketId);
+      }
+    };
+
     try {
       const ticketId = await redis.lpop(QUEUE_KEY);
       if (!ticketId) return;
@@ -178,6 +185,8 @@ const main = async () => {
               RESULT_TTL,
             );
             logger.trace({ ticketId }, "saved");
+
+            notifyViaWs(ticketId);
           } else {
             ticketRetries.delete(ticketId);
             await redis.set(
@@ -190,6 +199,8 @@ const main = async () => {
               { ticketId, retries },
               "not all requested targets could be resolved after 3 retries, error set in Redis",
             );
+
+            notifyViaWs(ticketId);
           }
         } else {
           await redis.set(
@@ -199,6 +210,8 @@ const main = async () => {
             RESULT_TTL,
           );
           logger.warn({ ticketId }, "failed to get token, error set in Redis");
+
+          notifyViaWs(ticketId);
         }
       } catch (err) {
         logger.error(
@@ -217,6 +230,8 @@ const main = async () => {
           "EX",
           RESULT_TTL,
         );
+
+        notifyViaWs(ticketId);
       }
 
       await sleep(800);
@@ -256,6 +271,8 @@ const main = async () => {
     }
     return null;
   };
+
+  const wsClients = new Set<ElysiaWS>();
 
   const app = new Elysia()
     .use(
@@ -367,8 +384,17 @@ const main = async () => {
           ticket_id: t.String(),
         }),
       },
-    );
-
+    )
+    .ws("/ws", {
+      open(ws) {
+        wsClients.add(ws);
+      },
+      close(ws) {
+        wsClients.delete(ws);
+      },
+      // read-only
+      message(ws, _message) {},
+    });
   app
     .use(
       pluginGracefulServer({
