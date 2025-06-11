@@ -16,20 +16,40 @@ import {
   type GetSunatTokenPayload,
 } from "./scraper";
 
-if (!process.env.APP_REDIS_CONNECTION_URL) {
-  throw new Error("please set the Redis connection URL");
+function onRedisError(err: Error) {
+  if (err.message.includes("WRONGPASS")) {
+    try {
+      redis.disconnect();
+      redis = createRedisClient();
+    } catch (err) {
+      console.error("error disconnecting from redis", err);
+    }
+  }
+}
+
+function createRedisClient() {
+  if (!process.env.APP_REDIS_CONNECTION_URL) {
+    throw new Error("please set the Redis connection URL");
+  }
+
+  const client = new Redis(process.env.APP_REDIS_CONNECTION_URL, {
+    retryStrategy: (times) => {
+      const delay = Math.min(times * 50, 2000);
+      return delay;
+    },
+  });
+
+  client.on("error", (err) => onRedisError(err));
+
+  return client;
 }
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const redis = new Redis(process.env.APP_REDIS_CONNECTION_URL, {
-  retryStrategy: (times) => {
-    const delay = Math.min(times * 50, 2000);
-    return delay;
-  },
-});
+let redis = createRedisClient();
+// redis.on("error", (err) => onRedisError(err));
 
 const DEFAULT_TIMEOUT_MS = 30000 * 5;
 const PAYLOAD_TTL = 2400; // 40m
