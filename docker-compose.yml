@@ -1,0 +1,9 @@
+services:
+  sunat-playwright-scraper:
+    image: gcr.io/qompa-io/sunat-playwright-scraper:latest
+    container_name: sunat-playwright-scraper
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "80:80"
