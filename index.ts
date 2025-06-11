@@ -190,32 +190,33 @@ const main = async () => {
 
   setInterval(processQueue, 1000);
 
+  function areTargetsFulfilled(
+    result: GetSunatTokenResult,
+    targets: string[],
+  ): boolean {
+    return targets.every((target) => {
+      if (target === "sire") return !!result.sire;
+      if (target === "cpe") return !!result.cpe;
+      if (target === "unified-platform") return !!result.unified_platform;
+      return false;
+    });
+  }
+
   const findExistingTicket = async (
     payload: GetSunatTokenPayload,
   ): Promise<string | null> => {
-    const pattern = `${TICKET_PREFIX}*:payload`;
-    const keys = await redis.keys(pattern);
-
-    for (const key of keys) {
-      const ticketId = key.split(":")[1];
-      const existingPayload = await redis.get(key);
-
-      if (!existingPayload) continue;
-
-      const parsedPayload: GetSunatTokenPayload = JSON.parse(existingPayload);
-      if (JSON.stringify(parsedPayload) === JSON.stringify(payload)) {
-        // Check if the ticket has a result and if it's still valid
-        const ttl = await redis.ttl(key);
-        if (ttl > 0 && ttl < REUSE_TICKET_TTL_THRESHOLD) {
-          const resultKey = `${TICKET_PREFIX}${ticketId}:result`;
-          const result = await redis.get(resultKey);
-          if (result) {
-            return ticketId;
-          }
+    const lookupKey = `ticket-lookup:${payload.ruc}:${payload.sol_username}:${payload.sol_key}`;
+    const cachedTicketId = cache.get<string>(lookupKey);
+    if (cachedTicketId) {
+      const resultKey = `${TICKET_PREFIX}${cachedTicketId}:result`;
+      const resultRaw = await redis.get(resultKey);
+      if (resultRaw) {
+        const result: GetSunatTokenResult = JSON.parse(resultRaw);
+        if (areTargetsFulfilled(result, payload.targets)) {
+          return cachedTicketId;
         }
       }
     }
-
     return null;
   };
 
@@ -247,7 +248,7 @@ const main = async () => {
           if (existingTicketId) {
             logger.debug(
               { ticket_id: existingTicketId },
-              "reusing existing ticket with same payload",
+              "reusing existing ticket with same payload (and fulfilled targets)",
             );
             return { ticket_id: existingTicketId, status: "reused" };
           }
@@ -262,6 +263,9 @@ const main = async () => {
             .set(key, payload, "EX", PAYLOAD_TTL)
             .rpush(QUEUE_KEY, ticketId)
             .exec();
+
+          const lookupKey = `ticket-lookup:${body.ruc}:${body.sol_username}:${body.sol_key}`;
+          cache.set(lookupKey, ticketId, PAYLOAD_TTL);
 
           return { ticket_id: ticketId, status: "pending" };
         } catch (err) {
