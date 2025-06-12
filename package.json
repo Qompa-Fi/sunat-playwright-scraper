@@ -25,6 +25,8 @@
   },
   "dependencies": {
     "@bogeychan/elysia-logger": "^0.1.7",
+    "@elysiajs/opentelemetry": "^1.3.0",
+    "@sentry/bun": "^9.28.1",
     "@types/adm-zip": "0.5.7",
     "adm-zip": "^0.5.16",
     "elysia": "^1.2.10",

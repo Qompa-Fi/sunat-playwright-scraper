@@ -1,7 +1,9 @@
 import { pluginGracefulServer } from "graceful-server-elysia";
+import { opentelemetry } from "@elysiajs/opentelemetry";
 import type { Browser } from "playwright";
 import type { ElysiaWS } from "elysia/ws";
 import { chromium } from "playwright";
+import * as Sentry from "@sentry/bun";
 import { v4 as uuidv4 } from "uuid";
 import { Elysia, t } from "elysia";
 import NodeCache from "node-cache";
@@ -16,6 +18,12 @@ import {
   type GetSunatTokenResult,
   type GetSunatTokenPayload,
 } from "./scraper";
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV === "production" ? "live" : "local",
+  integrations: [Sentry.bunServerIntegration()],
+});
 
 function onRedisError(err: Error) {
   if (err.message.includes("WRONGPASS")) {
@@ -275,6 +283,28 @@ const main = async () => {
   const wsClients = new Set<ElysiaWS>();
 
   const app = new Elysia()
+    .decorate("Sentry", Sentry)
+    .use(opentelemetry())
+    .onError({ as: "global" }, function captureException({ error, Sentry }) {
+      Sentry.captureException(error);
+    })
+    .onAfterResponse(
+      { as: "global" },
+      // https://github.com/elysiajs/opentelemetry/issues/40#issuecomment-2585837826
+      function injectAttributes({
+        body,
+        cookie,
+        params,
+        request,
+        response,
+        route,
+        server,
+        store,
+        headers,
+        path,
+        query,
+      }) {},
+    )
     .use(
       loggerMiddleware({ level: "debug", autoLogging: true, base: undefined }),
     )
@@ -395,6 +425,7 @@ const main = async () => {
       // read-only
       message(ws, _message) {},
     });
+
   app
     .use(
       pluginGracefulServer({
